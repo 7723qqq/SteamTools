@@ -90,6 +90,8 @@ public static class CertGenerator
     /// <param name="notBefore"></param>
     /// <param name="notAfter"></param>
     /// <param name="rsaKeySizeInBits"></param>
+    /// <param name="crlDistributionPointUrl">证书吊销列表地址，为空时不写入 CRL Distribution Point 扩展</param>
+    /// <param name="caIssuerUrl">签发者证书地址，为空时不写入 Authority Information Access 扩展</param>
     /// <returns></returns>
     public static X509Certificate2 CreateEndCertificate(
         X509Certificate2 issuerCertificate,
@@ -97,7 +99,9 @@ public static class CertGenerator
         IEnumerable<string>? extraDnsNames = default,
         DateTimeOffset? notBefore = default,
         DateTimeOffset? notAfter = default,
-        int rsaKeySizeInBits = 2048)
+        int rsaKeySizeInBits = 2048,
+        string? crlDistributionPointUrl = default,
+        string? caIssuerUrl = default)
     {
         using var rsa = RSA.Create(rsaKeySizeInBits);
         var request = new CertificateRequest(subjectName, rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -132,6 +136,16 @@ public static class CertGenerator
         var dnsNames = dnsBuilder.Build();
         request.CertificateExtensions.Add(dnsNames);
 
+        if (!string.IsNullOrWhiteSpace(crlDistributionPointUrl))
+        {
+            request.CertificateExtensions.Add(CreateCrlDistributionPointExtension(crlDistributionPointUrl));
+        }
+
+        if (!string.IsNullOrWhiteSpace(caIssuerUrl))
+        {
+            request.CertificateExtensions.Add(CreateAuthorityInformationAccessExtension(caIssuerUrl));
+        }
+
         if (notBefore == null || notBefore.Value < issuerCertificate.NotBefore)
         {
             notBefore = issuerCertificate.NotBefore;
@@ -145,6 +159,38 @@ public static class CertGenerator
         var serialNumber = BitConverter.GetBytes(Random.Shared.NextInt64());
         using var certOnly = request.Create(issuerCertificate, notBefore.Value, notAfter.Value, serialNumber);
         return certOnly.CopyWithPrivateKey(rsa);
+    }
+
+    /// <summary>
+    /// 创建 CRL Distribution Point 扩展 (2.5.29.31)
+    /// </summary>
+    /// <param name="url">证书吊销列表地址</param>
+    /// <returns></returns>
+    public static X509Extension CreateCrlDistributionPointExtension(string url)
+    {
+        // GeneralName ::= CHOICE { uniformResourceIdentifier [6] IA5String, ... }
+        var uri = DerEncoder.Encode(DerEncoder.ContextSpecificTag(6), Encoding.ASCII.GetBytes(url));
+        // DistributionPointName ::= CHOICE { fullName [0] GeneralNames, ... }
+        var fullName = DerEncoder.Encode(DerEncoder.ContextSpecificConstructedTag(0), uri);
+        // DistributionPoint ::= SEQUENCE { distributionPoint [0] DistributionPointName OPTIONAL, ... }
+        var distributionPoint = DerEncoder.Encode(DerEncoder.ContextSpecificConstructedTag(0), fullName);
+        // CRLDistributionPoints ::= SEQUENCE SIZE (1..MAX) OF DistributionPoint
+        return new X509Extension("2.5.29.31", DerEncoder.Sequence(DerEncoder.Sequence(distributionPoint)), false);
+    }
+
+    /// <summary>
+    /// 创建 Authority Information Access 扩展 (1.3.6.1.5.5.7.1.1)
+    /// </summary>
+    /// <param name="url">签发者证书地址</param>
+    /// <returns></returns>
+    public static X509Extension CreateAuthorityInformationAccessExtension(string url)
+    {
+        // id-ad-caIssuers 1.3.6.1.5.5.7.48.2
+        var accessMethod = DerEncoder.ObjectIdentifier(new byte[] { 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x02 });
+        var accessLocation = DerEncoder.Encode(DerEncoder.ContextSpecificTag(6), Encoding.ASCII.GetBytes(url));
+        // AccessDescription ::= SEQUENCE { accessMethod OBJECT IDENTIFIER, accessLocation GeneralName OPTIONAL }
+        // AuthorityInfoAccessSyntax ::= SEQUENCE SIZE (1..MAX) OF AccessDescription
+        return new X509Extension("1.3.6.1.5.5.7.1.1", DerEncoder.Sequence(DerEncoder.Sequence(accessMethod, accessLocation)), false);
     }
 
     private static void Add(this SubjectAlternativeNameBuilder builder, string name)

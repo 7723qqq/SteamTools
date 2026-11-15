@@ -89,6 +89,21 @@ public static class KestrelServerOptionsExtensions
 #endif
 
     /// <summary>
+    /// 监听证书吊销列表分发服务
+    /// </summary>
+    /// <param name="options"></param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void ListenCrl(this KestrelServerOptions options)
+    {
+        var crlPort = IReverseProxyConfig.CrlPort;
+        options.ListenLocalhost(crlPort);
+
+        var logger = options.GetLogger();
+        logger.LogInformation(
+            "Listened http://127.0.0.1:{crlPort}, the certificate revocation list distribution service is started.", crlPort);
+    }
+
+    /// <summary>
     /// 监听 HTTP 反向代理
     /// </summary>
     /// <param name="options"></param>

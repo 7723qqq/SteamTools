@@ -200,6 +200,9 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
                 //options.ListenGitReverseProxy();
 #endif
 
+                // 证书吊销列表分发服务在所有模式下都需要启动
+                options.ListenCrl();
+
                 if (ProxyMode is ProxyMode.System or ProxyMode.PAC or ProxyMode.VPN)
                 {
                     options.ListenHttpProxy();
