@@ -39,6 +39,14 @@ partial interface IReverseProxyConfig
     /// </summary>
     static int HttpsPort { get; } = GetAvailableTcpPort(HttpsPortDefault);
 
+    const int CrlPortDefault = 26502;
+
+    /// <summary>
+    /// 证书吊销列表分发端口
+    /// <para>叶子证书内嵌此端口的 CRL Distribution Point 地址，端口不可用时顺延到下一个空闲端口</para>
+    /// </summary>
+    static int CrlPort { get; } = GetAvailableTcpPort(CrlPortDefault);
+
     /// <summary>
     /// 获取已监听的端口
     /// </summary>

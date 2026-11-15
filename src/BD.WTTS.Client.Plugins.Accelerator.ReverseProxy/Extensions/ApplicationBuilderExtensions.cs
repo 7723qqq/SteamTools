@@ -18,6 +18,18 @@ static class ApplicationBuilderExtensions
     }
 
     /// <summary>
+    /// 使用证书吊销列表分发中间件
+    /// </summary>
+    /// <param name="app"></param>
+    /// <returns></returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static IApplicationBuilder UseHttpCrl(this IApplicationBuilder app)
+    {
+        var middleware = app.ApplicationServices.GetRequiredService<HttpCrlMiddleware>();
+        return app.Use(next => context => middleware.InvokeAsync(context, next));
+    }
+
+    /// <summary>
     /// 使用本地 Http 请求中间件
     /// </summary>
     /// <param name="app"></param>

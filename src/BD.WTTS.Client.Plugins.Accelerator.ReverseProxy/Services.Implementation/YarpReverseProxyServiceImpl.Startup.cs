@@ -39,6 +39,9 @@ partial class YarpReverseProxyServiceImpl
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static void StartupConfigure(IApplicationBuilder app)
     {
+        // 证书吊销列表需要优先于 PAC 与反向代理处理，否则走代理的请求无法取到吊销列表
+        app.UseHttpCrl();
+
         app.UseHttpLocalRequest();
 
         app.UseHttpProxyPac();
