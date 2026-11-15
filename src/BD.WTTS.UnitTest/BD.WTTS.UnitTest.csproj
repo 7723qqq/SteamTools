@@ -28,6 +28,12 @@
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Certificate\CertGenerator.cs">
 			<LinkBase>Services.Implementation\Certificate</LinkBase>
 		</Compile>
+		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Certificate\CrlGenerator.cs">
+			<LinkBase>Services.Implementation\Certificate</LinkBase>
+		</Compile>
+		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Certificate\DerEncoder.cs">
+			<LinkBase>Services.Implementation\Certificate</LinkBase>
+		</Compile>
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services\Certificate\CertificateFailureDiagnostics.cs" />
 		<Compile Condition="'$(Configuration)'!='Debug'" Include="..\Utils.cs" />
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Net\DnsDohAnalysisService.cs">
