@@ -58,8 +58,10 @@ static partial class GlobalDllImportResolver
     static IEnumerable<string> GetLibraryNames()
     {
         yield return e_sqlite3;
+#if !WTTS_SIMD_SKIA
         yield return libSkiaSharp;
         yield return libHarfBuzzSharp;
+#endif
 #if WINDOWS || TOOL_PUBLISH
         yield return av_libGLESv2;
         yield return WebView2Loader;
@@ -71,7 +73,11 @@ static partial class GlobalDllImportResolver
 
 #pragma warning disable SA1304 // Non-private readonly fields should begin with upper-case letter
 #pragma warning disable SA1307 // Accessible fields should begin with upper-case letter
+#if WINDOWS
+    internal static readonly HashSet<string> libraryNames = new(GetLibraryNames(), StringComparer.OrdinalIgnoreCase);
+#else
     internal static readonly HashSet<string> libraryNames = new(GetLibraryNames());
+#endif
 #pragma warning restore SA1307 // Accessible fields should begin with upper-case letter
 #pragma warning restore SA1304 // Non-private readonly fields should begin with upper-case letter
 }

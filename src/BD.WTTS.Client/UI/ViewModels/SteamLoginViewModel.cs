@@ -4,12 +4,13 @@ using BD.SteamClient.Services;
 namespace BD.WTTS.UI.ViewModels;
 
 /// <summary>Shared Steam sign-in state. Consumers own the work performed after authentication.</summary>
-public sealed class SteamLoginViewModel : ViewModelBase
+public sealed partial class SteamLoginViewModel : ViewModelBase
 {
     static readonly SemaphoreSlim sessionSaveGate = new(1, 1);
     readonly ISteamAccountService account;
     readonly ISteamSessionService sessions;
-    readonly bool requireMobileSession;
+    readonly EAuthTokenPlatformType? defaultCredentialPlatform;
+    bool requireMobileSession;
     SteamLoginState pendingState = new();
     CancellationTokenSource? operation;
     CancellationTokenSource? qrOperation;
@@ -19,7 +20,7 @@ public sealed class SteamLoginViewModel : ViewModelBase
 
     public SteamLoginViewModel(SteamLoginState? loginState = null, bool allowCookieLogin = false,
         bool rememberLogin = false, ISteamAccountService? accountService = null, ISteamSessionService? sessionService = null,
-        bool requireMobileSession = false)
+        bool requireMobileSession = false, EAuthTokenPlatformType? defaultCredentialPlatform = null)
     {
         State = loginState ?? new();
         account = accountService ?? Ioc.Get<ISteamAccountService>();
@@ -27,6 +28,7 @@ public sealed class SteamLoginViewModel : ViewModelBase
         AllowCookieLogin = allowCookieLogin;
         RememberLogin = rememberLogin;
         this.requireMobileSession = requireMobileSession;
+        this.defaultCredentialPlatform = defaultCredentialPlatform;
         UserName = State.Username;
         LoginCommand = Register(LoginAsync);
         QrLoginCommand = Register(LoginWithQrCodeAsync);
@@ -36,7 +38,7 @@ public sealed class SteamLoginViewModel : ViewModelBase
         var cancel = ReactiveCommand.Create(Cancel);
         CompositeDisposable.Add(cancel);
         CancelCommand = cancel;
-        this.WhenAnyValue(x => x.UserName).Skip(1).Subscribe(_ =>
+        this.ObserveValue(nameof(UserName), static x => x.UserName).Skip(1).Subscribe(_ =>
         {
             if (pendingState.ClientId.HasValue)
                 Cancel();
@@ -54,8 +56,8 @@ public sealed class SteamLoginViewModel : ViewModelBase
     public bool AllowCookieLogin { get; }
     public Func<CancellationToken, Task<IReadOnlyList<SteamSavedLoginAccount>>>? SavedAccountsProvider { get; set; }
     public bool AllowSavedAccountLogin => SavedAccountsProvider != null;
-    [Reactive] public IReadOnlyList<SteamSavedLoginAccount> SavedAccounts { get; private set; } = Array.Empty<SteamSavedLoginAccount>();
-    [Reactive] public SteamSavedLoginAccount? SelectedSavedAccount { get; set; }
+    [Reactive] public partial IReadOnlyList<SteamSavedLoginAccount> SavedAccounts { get; private set; } = Array.Empty<SteamSavedLoginAccount>();
+    [Reactive] public partial SteamSavedLoginAccount? SelectedSavedAccount { get; set; }
     public ICommand LoadSavedAccountsCommand { get; }
     public ICommand SavedAccountLoginCommand { get; }
     public Func<SteamLoginState, Task>? LoginSucceededAsync { get; set; }
@@ -69,6 +71,21 @@ public sealed class SteamLoginViewModel : ViewModelBase
         }
     }
     public bool HadTwoFactorChallenge { get; private set; }
+    public bool RequireMobileSession
+    {
+        get => requireMobileSession;
+        set
+        {
+            if (requireMobileSession == value || IsBusy || Disposed)
+                return;
+
+            this.RaiseAndSetIfChanged(ref requireMobileSession, value);
+            StatusMessage = null;
+            Cancel();
+        }
+    }
+    public string? TwoFactorCodeMismatchMessage { get; set; }
+    public string? LoginThrottledMessage { get; set; }
     public bool UsedQrCode { get; private set; }
     public bool UsedAutomaticTwoFactor { get; private set; }
     public bool Requires2FA => pendingState.Requires2FA;
@@ -80,18 +97,18 @@ public sealed class SteamLoginViewModel : ViewModelBase
     public ICommand QrLoginCommand { get; }
     public ICommand CookieLoginCommand { get; }
     public ICommand CancelCommand { get; }
-    [Reactive] public string? UserName { get; set; }
-    [Reactive] public string? Password { get; set; }
-    [Reactive] public string? GuardCode { get; set; }
-    [Reactive] public bool RememberLogin { get; set; }
-    [Reactive] public bool IsBusy { get; private set; }
-    [Reactive] public bool IsQrBusy { get; private set; }
-    [Reactive] public bool HasQrError { get; private set; }
-    [Reactive] public string? QrStatusMessage { get; private set; }
-    [Reactive] public string? StatusMessage { get; private set; }
-    [Reactive] public Stream? QrCodeImage { get; private set; }
-    [Reactive] public string? SessionId { get; set; }
-    [Reactive] public string? SteamLoginSecure { get; set; }
+    [Reactive] public partial string? UserName { get; set; }
+    [Reactive] public partial string? Password { get; set; }
+    [Reactive] public partial string? GuardCode { get; set; }
+    [Reactive] public partial bool RememberLogin { get; set; }
+    [Reactive] public partial bool IsBusy { get; private set; }
+    [Reactive] public partial bool IsQrBusy { get; private set; }
+    [Reactive] public partial bool HasQrError { get; private set; }
+    [Reactive] public partial string? QrStatusMessage { get; private set; }
+    [Reactive] public partial string? StatusMessage { get; private set; }
+    [Reactive] public partial Stream? QrCodeImage { get; private set; }
+    [Reactive] public partial string? SessionId { get; set; }
+    [Reactive] public partial string? SteamLoginSecure { get; set; }
 
     void NotifyChallenge()
     {
@@ -133,7 +150,7 @@ public sealed class SteamLoginViewModel : ViewModelBase
                 state.TwofactorCode = GetAutomaticCode(currentProvider, state);
                 automaticAttempted = true;
             }
-            var platform = requireMobileSession ? EAuthTokenPlatformType.KEauthTokenPlatformTypeMobileApp : (EAuthTokenPlatformType?)null;
+            var platform = requireMobileSession ? EAuthTokenPlatformType.KEauthTokenPlatformTypeMobileApp : defaultCredentialPlatform;
             await SubmitCredentialAsync(state, platform, automaticAttempted, token);
             HadTwoFactorChallenge |= state.Requires2FA || automaticAttempted;
             if (!automaticAttempted && state.Requires2FA && AutomaticTwoFactorCode is { } provider)
@@ -234,8 +251,8 @@ public sealed class SteamLoginViewModel : ViewModelBase
                     return true;
                 }, token, TaskCreationOptions.None, uiScheduler);
                 var request = requireMobileSession
-                    ? account.DoLoginWithQRCodeAsync(state, render, EAuthTokenPlatformType.KEauthTokenPlatformTypeMobileApp, deviceFriendlyName: "Watt Toolkit", cancellationToken: token)
-                    : account.DoLoginWithQRCodeAsync(state, render, deviceFriendlyName: "Watt Toolkit", cancellationToken: token);
+                    ? account.DoLoginWithQRCodeAsync(state, render, EAuthTokenPlatformType.KEauthTokenPlatformTypeMobileApp, deviceFriendlyName: "Desktop", cancellationToken: token)
+                    : account.DoLoginWithQRCodeAsync(state, render, deviceFriendlyName: "Desktop", cancellationToken: token);
                 await request.WaitAsync(token);
                 token.ThrowIfCancellationRequested();
                 if (state.Success)
@@ -436,7 +453,15 @@ public sealed class SteamLoginViewModel : ViewModelBase
             pendingState.TwofactorCode = pendingState.EmailCode = null;
             GuardCode = null;
             NotifyChallenge();
-            StatusMessage = ex is InvalidOperationException ? ex.Message : Strings.L10nCore_SteamLoginNetwork;
+            StatusMessage = ex switch
+            {
+                SteamAccountService.SteamAuthenticationException { Result: (int)BD.SteamClient.Enums.SteamResult.TwoFactorCodeMismatch }
+                    when TwoFactorCodeMismatchMessage is { } message => message,
+                SteamAccountService.SteamAuthenticationException { Result: (int)BD.SteamClient.Enums.SteamResult.AccountLoginDeniedThrottle }
+                    when LoginThrottledMessage is { } message => message,
+                InvalidOperationException => ex.Message,
+                _ => Strings.L10nCore_SteamLoginNetwork,
+            };
         }
         finally
         {

@@ -7,6 +7,9 @@ sealed partial class Program : Startup
 
     public Program(string[]? args = null) : base(args)
     {
+#if WTTS_NATIVE_AOT
+        RegisterBuiltInPlugins();
+#endif
 #if DEBUG
         Console.WriteLine("args: ");
         if (args != null)
@@ -50,6 +53,11 @@ sealed partial class Program : Startup
         services.TryAddRepositorySecureStorage();
         // 首选项(Preferences) - 由 Repository 提供
         services.AddRepositoryPreferences();
+#endif
+
+#if (WINDOWS || MACCATALYST || MACOS || LINUX) && !(IOS || ANDROID)
+        // Steam plugins register the remaining account services after app startup configuration.
+        services.TryAddSteamSessionService();
 #endif
 
         // 添加主线程助手(MainThreadDesktop)
@@ -155,6 +163,7 @@ sealed partial class Program : Startup
             // 添加服务端 API 调用(BD.WTTS.MicroServices.ClientSDK)
             services.TryAddMicroServiceClient();
 
+#if !WTTS_NATIVE_AOT
             services.AddAutoMapper(cfg =>
             {
                 if (TryGetPlugins(out var plugins))
@@ -173,6 +182,7 @@ sealed partial class Program : Startup
                     }
                 }
             });
+#endif
 
             // 业务平台用户管理
             services.TryAddUserManager();

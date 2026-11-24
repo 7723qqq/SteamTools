@@ -6,7 +6,7 @@ using WinAuth;
 
 namespace BD.WTTS.UI.ViewModels;
 
-public sealed class SteamQrLoginPageViewModel : WindowViewModel
+public sealed partial class SteamQrLoginPageViewModel : WindowViewModel
 {
     readonly AuthenticatorItemModel item;
     readonly SteamAuthenticator authenticator;
@@ -34,16 +34,17 @@ public sealed class SteamQrLoginPageViewModel : WindowViewModel
         ApproveCommand = approve;
         ReviewCommand = review;
         Challenges.CollectionChanged += (_, _) => this.RaisePropertyChanged(nameof(HasMultipleChallenges));
-        this.WhenAnyValue(x => x.SelectedChallenge)
+        this.ObserveValue(nameof(SelectedChallenge), static x => x.SelectedChallenge)
             .Subscribe(_ => ClearReview())
             .AddTo(this);
-        this.WhenAnyValue(x => x.IsBusy, x => x.IsApproved, x => x.HasSavedSession)
-            .Subscribe(_ =>
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is null or "" or nameof(IsBusy) or nameof(IsApproved) or nameof(HasSavedSession))
             {
                 this.RaisePropertyChanged(nameof(CanApprove));
                 this.RaisePropertyChanged(nameof(CanScan));
-            })
-            .AddTo(this);
+            }
+        };
         ValidateSavedSession();
     }
 
@@ -56,13 +57,13 @@ public sealed class SteamQrLoginPageViewModel : WindowViewModel
     public ICommand ReviewCommand { get; }
     public ObservableCollection<SteamLoginQrChallenge> Challenges { get; } = new();
 
-    [Reactive] public bool IsBusy { get; set; }
-    [Reactive] public bool IsApproved { get; set; }
-    [Reactive] public bool HasSavedSession { get; private set; }
-    [Reactive] public bool PersistentLogin { get; set; }
-    [Reactive] public SteamLoginQrChallenge? SelectedChallenge { get; set; }
-    [Reactive] public SteamQrLoginRequestDetails? RequestDetails { get; private set; }
-    [Reactive] public string Status { get; private set; } = Strings.L10nAuthIdle_Text032;
+    [Reactive] public partial bool IsBusy { get; set; }
+    [Reactive] public partial bool IsApproved { get; set; }
+    [Reactive] public partial bool HasSavedSession { get; private set; }
+    [Reactive] public partial bool PersistentLogin { get; set; }
+    [Reactive] public partial SteamLoginQrChallenge? SelectedChallenge { get; set; }
+    [Reactive] public partial SteamQrLoginRequestDetails? RequestDetails { get; private set; }
+    [Reactive] public partial string Status { get; private set; } = Strings.L10nAuthIdle_Text032;
 
     void SetStatus(string text) => Status = text;
 

@@ -37,11 +37,13 @@ global using Avalonia.Utilities;
 global using Avalonia.Logging;
 global using Avalonia.VisualTree;
 global using Avalonia.Interactivity;
+#if !WTTS_SIMD_SKIA
 global using Avalonia.Skia;
+#endif
 global using Avalonia.Layout;
 global using Avalonia.LogicalTree;
 global using Avalonia.Rendering;
-global using ReactiveUI.Avalonia;
+global using ReactiveUI.Avalonia.Reactive;
 global using Avalonia.Platform.Storage;
 global using Cursor = Avalonia.Input.Cursor;
 global using KeyboardNavigation = Avalonia.Input.KeyboardNavigation;

@@ -23,11 +23,13 @@ public sealed partial class PlatformAccount
             _ => platformSwitchers.OfType<BasicPlatformSwitcher>().First(),
         };
 
-        SwapToAccountCommand = ReactiveCommand.Create<IAccount>(async acc =>
+        var swapCommand = ReactiveCommand.CreateFromTask<IAccount>(async acc =>
         {
             if (await platformSwitcher.SwapToAccount(acc, this))
                 Toast.Show(ToastIcon.Success, AppResources.Success_SwitchAccount__.Format(FullName, acc.DisplayName));
         });
+        swapCommand.ThrownExceptions.Subscribe(ex => ex.LogAndShowT(nameof(PlatformAccount)));
+        SwapToAccountCommand = swapCommand;
 
         OpenUrlToBrowserCommand = ReactiveCommand.Create<IAccount>(acc =>
         {
@@ -77,14 +79,21 @@ public sealed partial class PlatformAccount
 
         CreateShortcutCommand = ReactiveCommand.Create<IAccount>(acc => CreateShortcut(acc));
 
-        //LoadUsers();
+        if (platformSwitcher is SteamPlatformSwitcher steamSwitcher)
+            steamSwitcher.RegisterTrayAccounts(this);
     }
+
+    int loadingUsers;
 
     public void LoadUsers()
     {
+        if (Interlocked.Exchange(ref loadingUsers, 1) != 0)
+            return;
+
         Task2.InBackground(async () =>
         {
-            if (IsLoading) return;
+            HasLoadedUsers = false;
+            UsersLoadException = null;
             IsLoading = true;
             var loadedSteamPath = IsSteamPlatform ? ExePath : null;
             try
@@ -103,16 +112,22 @@ public sealed partial class PlatformAccount
                         }
                 });
 
-                if ((!IsSteamPlatform || string.Equals(loadedSteamPath, ExePath, StringComparison.Ordinal)) && users.Any_Nullable())
-                    Accounts = new ObservableCollection<IAccount>(users.OrderByDescending(x => x.LastLoginTime));
+                if (!IsSteamPlatform || string.Equals(loadedSteamPath, ExePath, StringComparison.Ordinal))
+                {
+                    if (users.Any_Nullable())
+                        Accounts = new ObservableCollection<IAccount>(users.OrderByDescending(x => x.LastLoginTime));
+                    HasLoadedUsers = true;
+                }
             }
             catch (Exception ex)
             {
+                UsersLoadException = ex;
                 ex.LogAndShowT(nameof(PlatformAccount));
             }
             finally
             {
                 IsLoading = false;
+                Volatile.Write(ref loadingUsers, 0);
                 if (IsSteamPlatform && !string.Equals(loadedSteamPath, ExePath, StringComparison.Ordinal))
                     LoadUsers();
             }
@@ -220,16 +235,15 @@ public sealed partial class PlatformAccount
 
     SKBitmap DrawIcon(SKBitmap originalBitmap, SKBitmap loginIcon, int iconSize)
     {
-        loginIcon = loginIcon.Resize(new SKSizeI(iconSize / 3, iconSize / 3), SKSamplingOptions.Default);
+        using var resizedLoginIcon = loginIcon.Resize(new SKSizeI(iconSize / 3, iconSize / 3), SKSamplingOptions.Default);
         SKBitmap avatarImgBitmap = new(iconSize, iconSize);
 
         using SKCanvas canvas = new(avatarImgBitmap);
-        SKPaint paint = new SKPaint();
-        // paint.FilterQuality = SKSamplingOptions.Default;
-        canvas.DrawBitmap(originalBitmap.Resize(new SKSizeI(iconSize, iconSize), SKSamplingOptions.Default),
-            new SKRect(0, 0, iconSize, iconSize), paint);
+        using SKPaint paint = new();
+        using var resizedOriginal = originalBitmap.Resize(new SKSizeI(iconSize, iconSize), SKSamplingOptions.Default);
+        canvas.DrawBitmap(resizedOriginal, new SKRect(0, 0, iconSize, iconSize), paint);
 
-        canvas.DrawBitmap(loginIcon, new SKRect(0, 0, loginIcon.Width, loginIcon.Height));
+        canvas.DrawBitmap(resizedLoginIcon, new SKRect(0, 0, resizedLoginIcon.Width, resizedLoginIcon.Height));
         return avatarImgBitmap;
     }
 

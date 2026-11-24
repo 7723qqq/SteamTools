@@ -9,7 +9,8 @@ namespace BD.WTTS.UI.Views.Windows;
 /// <typeparam name="TViewModel">ViewModel type.</typeparam>
 public class ReactiveAppWindow<TViewModel> : AppWindow, IViewFor<TViewModel>, IViewFor, IActivatableView where TViewModel : class
 {
-    public static readonly StyledProperty<TViewModel?> ViewModelProperty = ReactiveWindow<TViewModel>.ViewModelProperty.AddOwner<ReactiveAppWindow<TViewModel>>();
+    public static readonly StyledProperty<TViewModel?> ViewModelProperty = AvaloniaProperty
+        .Register<ReactiveAppWindow<TViewModel>, TViewModel?>(nameof(ViewModel));
 
     public static readonly StyledProperty<bool> IsSaveWindowSizeProperty = AvaloniaProperty
         .Register<ReactiveAppWindow<TViewModel>, bool>(nameof(IsSaveWindowSize), true);
@@ -39,9 +40,11 @@ public class ReactiveAppWindow<TViewModel> : AppWindow, IViewFor<TViewModel>, IV
         }
 #endif
 
-        // This WhenActivated block calls ViewModel's WhenActivated
-        // block if the ViewModel implements IActivatableViewModel.
-        this.WhenActivated(disposables => { });
+#if WTTS_NATIVE_AOT
+        NativeViewModelActivation.Attach(this);
+#else
+        this.WhenActivated();
+#endif
         this.GetObservable(DataContextProperty).Subscribe(OnDataContextChanged);
         this.GetObservable(ViewModelProperty).Subscribe(OnViewModelChanged);
 

@@ -161,16 +161,23 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
         {
             IOPath.DirCreateByNotExists(RootPath);
 
-            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            var applicationOptions = new WebApplicationOptions
             {
                 ContentRootPath = RootPath,
                 WebRootPath = RootPath,
-            });
+            };
+#if WTTS_NATIVE_AOT
+            var builder = WebApplication.CreateSlimBuilder(applicationOptions);
+            // The slim host omits these transports; acceleration still needs TLS and HTTP/3.
+            builder.WebHost.UseKestrelHttpsConfiguration().UseQuic();
+#else
+            var builder = WebApplication.CreateBuilder(applicationOptions);
+#endif
 
             builder.Logging.ClearProviders();
             builder.Logging.AddProvider(new LogConsoleService.Utf8StringLoggerProvider(AssemblyInfo.Accelerator));
 
-            builder.Services.Configure<HostFilteringOptions>(o =>
+            builder.Services.AddHostFiltering(o =>
             {
                 o.AllowEmptyHosts = true;
                 o.AllowedHosts = allowedHosts;
@@ -280,10 +287,14 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
         return bytes;
     }
 
-    public string? GetLogAllMessage()
+    static readonly Guid logStreamId = Guid.NewGuid();
+
+    public Task<ProxyLogUpdate?> GetLogUpdateAsync(Guid streamId, long offset)
     {
-        var result = LogConsoleService.Builder;
-        return result.ToString();
+        var (end, reset, utf8) = LogConsoleService.Builder.ReadSince(streamId == logStreamId ? offset : -1);
+        return Task.FromResult<ProxyLogUpdate?>(reset || utf8.Length != 0
+            ? new(logStreamId, end, reset, utf8)
+            : null);
     }
 
     // IDisposable

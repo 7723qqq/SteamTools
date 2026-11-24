@@ -2,7 +2,7 @@ using Avalonia.Media;
 
 namespace BD.WTTS.Models;
 
-public class ProxyDomainViewModel : ReactiveObject
+public partial class ProxyDomainViewModel : ReactiveObject
 {
     private readonly INetworkTestService networkTestService = INetworkTestService.Instance;
 
@@ -13,13 +13,14 @@ public class ProxyDomainViewModel : ReactiveObject
     public string Url { get; }
 
     [Reactive]
-    public string DelayMillseconds { get; set; } = string.Empty;
+    public partial string DelayMillseconds { get; set; } = string.Empty;
 
-    [ObservableAsProperty]
-    public bool RetestButtonVisible { get; }
+    readonly ObservableAsPropertyHelper<bool> retestButtonVisible;
+    readonly ObservableAsPropertyHelper<IBrush> delayColor;
 
-    [ObservableAsProperty]
-    public IBrush DelayColor { get; } = null!;
+    public bool RetestButtonVisible => retestButtonVisible?.Value ?? false;
+
+    public IBrush DelayColor => delayColor?.Value!;
 
     public ReadOnlyCollection<ProxyDomainViewModel>? Children { get; }
 
@@ -30,15 +31,15 @@ public class ProxyDomainViewModel : ReactiveObject
         Url = url;
         Children = children?.AsReadOnly();
 
-        this.WhenAnyValue(x => x.DelayMillseconds)
+        this.ObserveValue(nameof(DelayMillseconds), static x => x.DelayMillseconds)
             .Subscribe(delay => Children?.ForEach(child => child.DelayMillseconds = delay));
 
-        this.WhenAnyValue(x => x.DelayMillseconds)
+        retestButtonVisible = this.ObserveValue(nameof(DelayMillseconds), static x => x.DelayMillseconds)
             .Select(d => d != string.Empty && d != "-")
-            .ToPropertyEx(this, x => x.RetestButtonVisible);
+            .ToProperty(this, nameof(RetestButtonVisible));
 
         const int DelayMiddle = 1000;
-        this.WhenAnyValue(x => x.DelayMillseconds)
+        delayColor = this.ObserveValue(nameof(DelayMillseconds), static x => x.DelayMillseconds)
             .Select(d => d switch
             {
                 "Timeout" or "error" => Brushes.Red,
@@ -50,6 +51,6 @@ public class ProxyDomainViewModel : ReactiveObject
                    },
                 _ => Brushes.Gray,
             })
-            .ToPropertyEx(this, x => x.DelayColor);
+            .ToProperty<ProxyDomainViewModel, IBrush>(this, nameof(DelayColor));
     }
 }

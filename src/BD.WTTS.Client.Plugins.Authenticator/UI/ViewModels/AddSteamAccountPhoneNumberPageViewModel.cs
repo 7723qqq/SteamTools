@@ -6,7 +6,7 @@ namespace BD.WTTS.UI.ViewModels;
 /// <summary>
 /// 添加 Steam 账号手机号页面 VM
 /// </summary>
-public class AddSteamAccountPhoneNumberPageViewModel : WindowViewModel
+public partial class AddSteamAccountPhoneNumberPageViewModel : WindowViewModel
 {
     #region 步骤 Index 定义
 
@@ -22,25 +22,29 @@ public class AddSteamAccountPhoneNumberPageViewModel : WindowViewModel
     /// 手机号文本
     /// </summary>
     [Reactive]
-    public string? PhoneNumberText { get; set; }
+    public partial string? PhoneNumberText { get; set; }
 
     /// <summary>
     /// 验证码文本
     /// </summary>
     [Reactive]
-    public string? CodeText { get; set; }
+    public partial string? CodeText { get; set; }
 
     /// <summary>
     /// 步骤 Index
     /// </summary>
     [Reactive]
-    public int SelectIndex { get; set; }
+    public partial int SelectIndex { get; set; }
 
     /// <summary>
     /// 是否显示加载中
     /// </summary>
     [Reactive]
-    public bool IsLoading { get; set; }
+    public partial bool IsLoading { get; set; }
+
+    public ICommand StartBindingCommand { get; }
+    public ICommand ConfirmEmailCommand { get; }
+    public ICommand VerifyCodeCommand { get; }
 
     private readonly SteamAuthenticator.EnrollState _enrollState;
     private readonly SteamAuthenticator _steamAuthenticator;
@@ -54,6 +58,18 @@ public class AddSteamAccountPhoneNumberPageViewModel : WindowViewModel
 
         _steamAuthenticator = steamAuthenticator;
         _enrollState = enrollState;
+
+        StartBindingCommand = CreateCommand(StartBindingAsync);
+        ConfirmEmailCommand = CreateCommand(ConfirmBindingEmailAsync);
+        VerifyCodeCommand = CreateCommand(VerifyAccountPhoneWithCodeAsync);
+    }
+
+    ICommand CreateCommand(Func<Task> action)
+    {
+        var command = ReactiveCommand.CreateFromTask(action);
+        CompositeDisposable.Add(command);
+        CompositeDisposable.Add(command.ThrownExceptions.Subscribe(static ex => ex.LogAndShowT()));
+        return command;
     }
 
     /// <summary>
@@ -139,6 +155,8 @@ public class AddSteamAccountPhoneNumberPageViewModel : WindowViewModel
     /// <returns></returns>
     public async Task VerifyAccountPhoneWithCodeAsync()
     {
+        if (IsLoading) return;
+
         if (string.IsNullOrEmpty(PhoneNumberText))
         {
             Toast.Show(ToastIcon.Warning, AppResources.Warning_PleaseEnterTel);
@@ -151,12 +169,16 @@ public class AddSteamAccountPhoneNumberPageViewModel : WindowViewModel
             return;
         }
 
-        var verified = await _steamAuthenticator
-            .VerifyPhoneNumberAsync(PhoneNumberText!, CodeText!, _enrollState.AccessToken!);
-
-        if (verified)
+        IsLoading = true;
+        try
         {
-            Close?.Invoke(verified);
+            var verified = await _steamAuthenticator.VerifyPhoneNumberAsync(PhoneNumberText, CodeText, _enrollState.AccessToken!);
+            if (verified)
+                Close?.Invoke(true);
+        }
+        finally
+        {
+            IsLoading = false;
         }
     }
 }

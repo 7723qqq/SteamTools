@@ -9,6 +9,17 @@
 		<ApplicationManifest>Properties\app.manifest</ApplicationManifest>
 	</PropertyGroup>
 
+	<PropertyGroup Condition="'$(WttsNativeAot)' == 'true'">
+		<PublishAot>true</PublishAot>
+		<SelfContained>true</SelfContained>
+		<OptimizationPreference Condition="'$(OptimizationPreference)' == ''">Size</OptimizationPreference>
+		<InvariantGlobalization>false</InvariantGlobalization>
+	</PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'Release' AND '$(WttsNativeAot)' != 'true' AND $(RuntimeIdentifier.StartsWith('win-'))">
+        <PublishReadyToRun Condition="'$(PublishReadyToRun)' == ''">true</PublishReadyToRun>
+    </PropertyGroup>
+
 	<PropertyGroup Condition="$(TargetFramework.StartsWith('net3')) OR $(TargetFramework.StartsWith('net4')) OR $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
 		<ApplicationIcon Condition="'$(Configuration)'=='Release'">..\..\res\icons\app\v3\Icon.ico</ApplicationIcon>
 		<ApplicationIcon Condition="'$(Configuration)'=='Debug'">..\..\res\icons\app\v3\Icon.ico</ApplicationIcon>
@@ -114,37 +125,37 @@
 		<ProjectReference Include="..\BD.WTTS.Client\BD.WTTS.Client.csproj" />
 	</ItemGroup>
 
-	<!--<ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows' AND Exists('$(NugetPackageRoot)\system.drawing.common\$(Version_System_Drawing_Common)\lib\net9.0\System.Drawing.Common.dll')">
-		--><!-- Windows Only --><!--
-		--><!-- 修复：存在 Microsoft.WindowsDesktop.App 依赖时不会将 System.Drawing.Common.dll 复制到输出目录--><!--
-		<None Include="$(NugetPackageRoot)\system.drawing.common\$(Version_System_Drawing_Common)\lib\net9.0\System.Drawing.Common.dll">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</None>
-		<Reference Include="System.Drawing.Common">
-			<HintPath>$(NugetPackageRoot)\system.drawing.common\$(Version_System_Drawing_Common)\lib\net9.0\System.Drawing.Common.dll</HintPath>
-		</Reference>
-		<None Include="$(NugetPackageRoot)\microsoft.win32.systemevents\9.0.0\runtimes\win\lib\net9.0\Microsoft.Win32.SystemEvents.dll">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</None>
-		<Reference Include="Microsoft.Win32.SystemEvents">
-			<HintPath>$(NugetPackageRoot)\microsoft.win32.systemevents\9.0.0\runtimes\win\lib\net9.0\Microsoft.Win32.SystemEvents.dll</HintPath>
-		</Reference>
+	<ItemGroup Condition="'$(WttsUseSimdSkia)' == 'true'">
+		<PackageReference Include="SimdSkia.Avalonia.Desktop" />
+		<None Update="Properties\SimdSkia-MIT.txt" TargetPath="licenses\SimdSkia\SimdSkia-MIT.txt" CopyToPublishDirectory="PreserveNewest" />
+		<None Include="$(NuGetPackageRoot)simdskia.avalonia/$(Version_SimdSkia)/licenses/Avalonia-MIT.txt;
+					   $(NuGetPackageRoot)simdskia.core/$(Version_SimdSkia)/licenses/Clipper2-BSL-1.0.txt;
+					   $(NuGetPackageRoot)simdskia.core/$(Version_SimdSkia)/licenses/Skia-BSD.txt;
+					   $(NuGetPackageRoot)simdskia.compatibility/$(Version_SimdSkia)/licenses/SkiaSharp-MIT.txt;
+					   $(NuGetPackageRoot)simdskia.imaging/$(Version_SimdSkia)/licenses/Apache-2.0.txt;
+					   $(NuGetPackageRoot)simdskia.imaging/$(Version_SimdSkia)/licenses/Sdcb.SimdCodecs-MIT.txt;
+					   $(NuGetPackageRoot)simdskia.text/$(Version_SimdSkia)/licenses/SharpFont-MIT.txt"
+			  TargetPath="licenses\SimdSkia\%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+		<None Include="..\..\ref\FluentAvalonia\LICENSE" TargetPath="licenses\FluentAvalonia\LICENSE" CopyToPublishDirectory="PreserveNewest" />
 	</ItemGroup>
 
-	<ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows' AND Exists('$(NugetPackageRoot)\splat.drawing\$(Version_Splat_Drawing)\lib\net7.0\Splat.Drawing.dll')">
-		--><!-- Windows Only --><!--
-		--><!-- 修复：Splat.Drawing 包存在 WPF 的依赖项 --><!--
-		<PackageReference Include="Splat.Drawing">
-			<ExcludeAssets>all</ExcludeAssets>
-		</PackageReference>
-		<Reference Include="Splat.Drawing">
-			<HintPath>$(NugetPackageRoot)\splat.drawing\$(Version_Splat_Drawing)\lib\net7.0\Splat.Drawing.dll</HintPath>
-		</Reference>
-		--><!-- 修复：System.Reactive 包存在 System.Windows.Forms 的依赖项 --><!--
-		<Reference Include="System.Reactive">
-			<HintPath>$(NugetPackageRoot)\system.reactive\$(Version_System_Reactive)\lib\net6.0\System.Reactive.dll</HintPath>
-		</Reference>
-	</ItemGroup>-->
+	<!-- Debug discovers these projects' output DLLs rather than linking them into the app. -->
+	<ItemGroup Condition="'$(WttsNativeAot)' == 'true' OR ('$(Configuration)' == 'Debug' AND $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows')">
+		<ProjectReference Include="..\BD.WTTS.Client.Plugins.Accelerator\BD.WTTS.Client.Plugins.Accelerator.csproj" Aliases="AcceleratorPlugin" />
+		<ProjectReference Include="..\BD.WTTS.Client.Plugins.GameAccount\BD.WTTS.Client.Plugins.GameAccount.csproj" Aliases="GameAccountPlugin" />
+		<ProjectReference Include="..\BD.WTTS.Client.Plugins.GameList\BD.WTTS.Client.Plugins.GameList.csproj" Aliases="GameListPlugin" />
+		<ProjectReference Include="..\BD.WTTS.Client.Plugins.Authenticator\BD.WTTS.Client.Plugins.Authenticator.csproj" Aliases="AuthenticatorPlugin" />
+		<ProjectReference Include="..\BD.WTTS.Client.Plugins.SteamIdleCard\BD.WTTS.Client.Plugins.SteamIdleCard.csproj" Aliases="SteamIdleCardPlugin" />
+		<ProjectReference Include="..\BD.WTTS.Client.Plugins.ArchiSteamFarmPlus\BD.WTTS.Client.Plugins.ArchiSteamFarmPlus.csproj" Aliases="ArchiSteamFarmPlusPlugin"
+						  Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'" />
+		<ProjectReference Include="..\BD.WTTS.Client.Plugins.GameTools\BD.WTTS.Client.Plugins.GameTools.csproj" Aliases="GameToolsPlugin"
+						  Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'" />
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(WttsNativeAot)' != 'true' AND '$(Configuration)' == 'Debug' AND $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
+		<ProjectReference Update="..\BD.WTTS.Client.Plugins.*\*.csproj" ReferenceOutputAssembly="false" Private="false" />
+		<ProjectReference Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy.csproj" ReferenceOutputAssembly="false" Private="false" />
+	</ItemGroup>
 
 	<Import Project="..\TFM_NETX_WITH_DESKTOP.props" />
 

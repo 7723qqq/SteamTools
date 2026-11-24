@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
-using ReactiveUI.Avalonia;
+using Avalonia.Interactivity;
+using ReactiveUI.Avalonia.Reactive;
 
 namespace BD.WTTS.UI.Views.Controls;
 
@@ -13,7 +14,7 @@ public partial class GameAccelerator : ReactiveUserControl<GameAcceleratorViewMo
     /// Defines the <see cref="ItemsPerPage"/> property.
     /// </summary>
     public static readonly StyledProperty<int> ItemsPerPageProperty =
-        AvaloniaProperty.Register<CarouselItems, int>(nameof(ItemsPerPage), 4);
+        AvaloniaProperty.Register<GameAccelerator, int>(nameof(ItemsPerPage), 4);
 
     /// <summary>
     /// ItemsPerPage
@@ -34,6 +35,10 @@ public partial class GameAccelerator : ReactiveUserControl<GameAcceleratorViewMo
 
         SearchGameBox.SelectionChanged += SearchGameBox_SelectionChanged;
     }
+
+    private void Previous_Click(object? sender, RoutedEventArgs e) => GameCarousel.SwiperPrevious();
+
+    private void Next_Click(object? sender, RoutedEventArgs e) => GameCarousel.SwiperNext();
 
     private void SearchGameBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {

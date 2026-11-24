@@ -56,9 +56,15 @@ public sealed class Plugin : PluginBase<Plugin>, IPlugin
 
     readonly TaskCompletionSource<IReverseProxyService> reverseProxyService = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly TaskCompletionSource<ICertificateManager> certificateManager = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    int proxyInitialized;
-    internal Task ServicesReady => Task.WhenAll(reverseProxyService.Task, certificateManager.Task);
+    readonly BehaviorSubject<TrayToggleState> trayPreparation = new(TrayToggleState.Loading);
+    int proxyInitializationState;
+    internal Task ServicesReady { get; }
     //readonly TaskCompletionSource<IAcceleratorService> acceleratorService = new();
+
+    public Plugin()
+    {
+        ServicesReady = Task.WhenAll(reverseProxyService.Task, certificateManager.Task);
+    }
 
     public override void ConfigureDemandServices(IServiceCollection services, Startup startup)
     {
@@ -122,22 +128,50 @@ public sealed class Plugin : PluginBase<Plugin>, IPlugin
 
     public override async ValueTask OnInitializeAsync()
     {
-        var ipc = IPCMainProcessService.Instance;
-
-        // 启动加速模块子进程
-        await ipc.AddDaemonWithStartSubProcessAsync(moduleName, async ipc =>
+        // Publish availability before the helper connects; it can be delayed or fail to start.
+        trayPreparation.OnNext(TrayToggleState.Loading);
+        IApplication.Instance.UpdateMenuItems(moduleName, new TrayMenuItem
         {
-            var subProcessPath = SubProcessPath;
-            var p = await ipc.StartSubProcessAsync(subProcessPath.ThrowIsNull(),
-                isAdministrator: true);
-            return p;
+            Name = Strings.CommunityFix,
+            NameResourceKey = nameof(Strings.CommunityFix),
+            ToggleState = trayPreparation,
         });
+
+        try
+        {
+            var ipc = IPCMainProcessService.Instance;
+            var process = await ipc.AddDaemonWithStartSubProcessAsync(moduleName, async ipc =>
+                await ipc.StartSubProcessAsync(SubProcessPath.ThrowIsNull(), isAdministrator: true));
+            if (process == null)
+                trayPreparation.OnNext(TrayToggleState.Unavailable);
+            else
+                _ = ObserveTrayConnectionAsync();
+        }
+        catch
+        {
+            trayPreparation.OnNext(TrayToggleState.Unavailable);
+            throw;
+        }
+    }
+
+    async Task ObserveTrayConnectionAsync()
+    {
+        try
+        {
+            await ServicesReady.WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        catch (TimeoutException ex)
+        {
+            trayPreparation.OnNext(TrayToggleState.Unavailable);
+            Log.Warn(nameof(Plugin), ex, "Accelerator helper did not connect in time.");
+        }
     }
 
     public override async ValueTask OnPeerConnected(bool isReconnected)
     {
         if (!reverseProxyService.Task.IsCompletedSuccessfully || !certificateManager.Task.IsCompletedSuccessfully)
         {
+            trayPreparation.OnNext(TrayToggleState.Loading);
             var ipc = IPCMainProcessService.Instance;
 
             // 从子进程中获取 IPC 远程服务
@@ -151,6 +185,7 @@ public sealed class Plugin : PluginBase<Plugin>, IPlugin
             catch (Exception ex)
             {
                 // Keep the readiness tasks pending so a later connection can recover.
+                trayPreparation.OnNext(TrayToggleState.Unavailable);
                 Log.Error(nameof(Plugin), ex, "Accelerator IPC services could not be connected.");
                 return;
             }
@@ -168,15 +203,29 @@ public sealed class Plugin : PluginBase<Plugin>, IPlugin
             //    Console.WriteLine(ex);
             //}
 #endif
+        }
 
-            if (Interlocked.CompareExchange(ref proxyInitialized, 1, 0) == 0)
-                await MainThread2.InvokeOnMainThreadAsync(ProxyService.Current.InitializeAsync);
+        if (Interlocked.CompareExchange(ref proxyInitializationState, 1, 0) != 0)
+            return;
+
+        try
+        {
+            await MainThread2.InvokeOnMainThreadAsync(static () => ProxyService.Current.InitializeAsync());
+            if (ProxyService.Current.IsInitialized)
+                Volatile.Write(ref proxyInitializationState, 2);
+        }
+        finally
+        {
+            // A failed attempt must not prevent initialization on the next connection.
+            Interlocked.CompareExchange(ref proxyInitializationState, 0, 1);
         }
     }
 
-    public override void OnAddAutoMapper(IMapperConfigurationExpression cfg)
+    public override async ValueTask OnCommandRun(params string[] commandParams)
     {
-        cfg.AddProfile<AcceleratorAutoMapperProfile>();
+        if (commandParams is not ["start"])
+            throw new ArgumentException("Unknown accelerator command.", nameof(commandParams));
+        await ProxyService.Current.StartOrStopProxyService(true);
     }
 
     public override async ValueTask OnExit()
@@ -205,15 +254,19 @@ public sealed class Plugin : PluginBase<Plugin>, IPlugin
             {
                 try
                 {
+#if WTTS_NATIVE_AOT
+                    subProcessPath = Path.Combine(AppContext.BaseDirectory, "modules", moduleName);
+#else
                     subProcessPath = Assembly.GetExecutingAssembly().Location;
                     subProcessPath = Path.GetDirectoryName(subProcessPath);
                     subProcessPath.ThrowIsNull();
+#endif
 
                     const string fileName = $"Steam++.{moduleName}";
                     var subProcessFileName = OperatingSystem.IsWindows() ? $"{fileName}{FileEx.EXE}" : fileName;
                     subProcessPath = Path.Combine(subProcessPath, subProcessFileName);
 
-#if DEBUG // DEBUG 模式遍历项目查找模块
+#if DEBUG && !WTTS_NATIVE_AOT // DEBUG 模式遍历项目查找模块
                     if (!File.Exists(subProcessPath))
                     {
                         subProcessPath = Path.Combine(ProjectUtils.ProjPath, "src", "BD.WTTS.Client.Plugins.Accelerator.ReverseProxy", "bin", "Debug", $"net{Environment.Version.Major}.{Environment.Version.Minor}", subProcessFileName);

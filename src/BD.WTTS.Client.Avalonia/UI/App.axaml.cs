@@ -1,9 +1,6 @@
 using AngleSharp.Dom;
 using Avalonia.Input;
 using BD.WTTS.Client.Resources;
-using LiveChartsCore;
-using LiveChartsCore.SkiaSharpView;
-using SkiaSharp;
 using System.Drawing.Drawing2D;
 
 namespace BD.WTTS.UI;
@@ -15,6 +12,7 @@ public sealed partial class App : Application
     public App()
     {
         Name = AssemblyInfo.Trademark;
+        CompositeDisposable.Add(trayMenuBindings);
         OpenBrowserCommand = ReactiveCommand.Create<object?>(OpenBrowserCommandCore);
         CopyToClipboardCommand = ReactiveCommand.Create<object?>(CopyToClipboardCommandCore);
 #if MACOS
@@ -187,6 +185,10 @@ public sealed partial class App : Application
         //SetThemeNotChangeValue(UISettings.Theme.Value);
         //SetThemeAccent(UISettings.UseSystemThemeAccent.Value ? bool.TrueString : UISettings.ThemeAccent.Value);
         base.OnFrameworkInitializationCompleted();
+        #if WINDOWS && WTTS_NATIVE_AOT
+        if (Ioc.Get_Nullable<INotificationService>() is INotificationService.ILifeCycle notificationLifecycle)
+            notificationLifecycle.OnStartup();
+        #endif
     }
 
     //#if WINDOWS
@@ -251,7 +253,7 @@ public sealed partial class App : Application
 
     public void InitSettingSubscribe()
     {
-        GeneralSettings.TrayIcon.Subscribe(x => InitTrayIcon());
+        GeneralSettings.TrayIcon.Subscribe(_ => MainThread2.BeginInvokeOnMainThread(InitTrayIcon));
         UISettings.UseSystemThemeAccent.Subscribe(useSystemThemeAccent
             => SetThemeAccent(useSystemThemeAccent ? bool.TrueString : UISettings.ThemeAccent.Value));
         UISettings.ThemeAccent.Subscribe(color
@@ -259,7 +261,8 @@ public sealed partial class App : Application
                     UISettings.UseSystemThemeAccent.Value ? bool.TrueString : UISettings.ThemeAccent.Value),
             !UISettings.UseSystemThemeAccent.Value);
 
-        GeneralSettings.AutoRunOnStartup.Subscribe(IApplication.SetBootAutoStart);
+        if (OperatingSystem.IsWindows())
+            GeneralSettings.AutoRunOnStartup.Subscribe(IApplication.SetBootAutoStart);
 
         UISettings.WindowBackgroundMaterial.Subscribe(SetAllWindowransparencyMateria, false);
 

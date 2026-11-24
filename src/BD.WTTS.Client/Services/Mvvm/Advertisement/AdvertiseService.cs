@@ -4,23 +4,23 @@ namespace BD.WTTS.Services;
 /// <summary>
 /// 广告服务
 /// </summary>
-public sealed class AdvertiseService : ReactiveObject
+public sealed partial class AdvertiseService : ReactiveObject
 {
     static readonly Lazy<AdvertiseService> mCurrent = new(() => new(), LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static AdvertiseService Current => mCurrent.Value;
 
     [Reactive]
-    public ObservableCollection<AdvertisementDTO>? HorizontalBannerAdvertisements { get; set; }
+    public partial ObservableCollection<AdvertisementDTO>? HorizontalBannerAdvertisements { get; set; }
 
     [Reactive]
-    public ObservableCollection<AdvertisementDTO>? VerticalBannerAdvertisements { get; set; }
+    public partial ObservableCollection<AdvertisementDTO>? VerticalBannerAdvertisements { get; set; }
 
     [Reactive]
-    public bool IsInitialized { get; set; }
+    public partial bool IsInitialized { get; set; }
 
     [Reactive]
-    public bool IsShowAdvertise { get; set; } = true;
+    public partial bool IsShowAdvertise { get; set; } = true;
 
     public ICommand ClickAdvertisementCommand { get; }
 
@@ -44,7 +44,7 @@ public sealed class AdvertiseService : ReactiveObject
 
         ClickAdvertisementCommand = ReactiveCommand.Create<AdvertisementDTO>(ClickAdvertisement);
 
-        UserService.Current.WhenValueChanged(x => x.User, false)
+        UserService.Current.ObserveValue(nameof(UserService.User), static x => x.User).Skip(1)
                 .Subscribe(_ => CheckShow());
 
         //AdvertisementsSource.CountChanged
