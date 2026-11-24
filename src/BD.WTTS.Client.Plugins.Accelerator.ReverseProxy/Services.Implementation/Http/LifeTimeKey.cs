@@ -6,7 +6,7 @@ namespace BD.WTTS.Services.Implementation;
 /// <summary>
 /// 生命周期的 Key
 /// </summary>
-record LifeTimeKey
+readonly record struct LifeTimeKey
 {
     /// <summary>
     /// 域名

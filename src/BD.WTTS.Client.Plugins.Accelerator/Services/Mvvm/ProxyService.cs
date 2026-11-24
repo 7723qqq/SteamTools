@@ -127,6 +127,7 @@ public sealed partial class ProxyService
         }
         if (!ProxyStarting)
         {
+            autoRecoveryPending = false;
             ProxyStopping = !startOrStop;
             ProxyStarting = true;
             try
@@ -580,13 +581,134 @@ public sealed partial class ProxyService
     }
 
     Timer? timer;
+    int healthCheckRunning;
+    bool autoRecoveryPending;
+    bool usesServerSideProxy;
+    DateTimeOffset lastHealthCheck = DateTimeOffset.MinValue;
+    DateTimeOffset lastRecovery = DateTimeOffset.MinValue;
+    DateTimeOffset lastTokenRefresh = DateTimeOffset.MinValue;
+    TimeSpan recoveryBackoff = TimeSpan.FromSeconds(30);
 
     public void StartTimer()
     {
         if (traySession is { } session)
-            timer ??= new Timer(_ => AccelerateTime = Stopwatch.GetElapsedTime(session.StartedTimestamp),
-                null, 0, 1000);
+        {
+            timer?.Dispose();
+            timer = new Timer(OnTimerTick, session, 0, 1000);
+        }
     }
+
+    async void OnTimerTick(object? state)
+    {
+        try
+        {
+            if (state is TrayAccelerationSession session)
+                AccelerateTime = Stopwatch.GetElapsedTime(session.StartedTimestamp);
+            var now = DateTimeOffset.UtcNow;
+            if (now - lastHealthCheck < TimeSpan.FromSeconds(5))
+                return;
+            lastHealthCheck = now;
+            if (Interlocked.CompareExchange(ref healthCheckRunning, 1, 0) != 0)
+                return;
+            try
+            {
+                await MaintainProxyAsync(now);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref healthCheckRunning, 0);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(nameof(ProxyService), ex, "Proxy health check failed.");
+        }
+    }
+
+    async Task MaintainProxyAsync(DateTimeOffset now)
+    {
+        if (!ProxyStatus && !autoRecoveryPending)
+            return;
+
+        if (ProxyStatus &&
+            usesServerSideProxy &&
+            now - lastTokenRefresh >= TimeSpan.FromMinutes(1))
+        {
+            lastTokenRefresh = now;
+            await TryRequestServerSideProxyToken();
+        }
+
+        bool running;
+        try
+        {
+            running = reverseProxyService.ProxyRunning;
+        }
+        catch
+        {
+            running = false;
+        }
+
+        if (ProxyStatus && running)
+        {
+            autoRecoveryPending = false;
+            recoveryBackoff = TimeSpan.FromSeconds(30);
+            return;
+        }
+
+        if (ProxyStatus)
+        {
+            ProxyStatus = false;
+            IsAnyProxyScripts = false;
+            autoRecoveryPending = true;
+        }
+        if (!autoRecoveryPending ||
+            ProxyStarting ||
+            now - lastRecovery < recoveryBackoff)
+        {
+            return;
+        }
+
+        lastRecovery = now;
+        ProxyStarting = true;
+        ProxyStopping = true;
+        try
+        {
+            var stopResult = await StopProxyServiceAsync(isRecovery: true);
+            if (!string.IsNullOrWhiteSpace(stopResult.Error))
+            {
+                IncreaseRecoveryBackoff();
+                return;
+            }
+
+            var startResult = await StartProxyServiceAsync();
+            ProxyStatus = await startResult.OnStartedShowToastReturnProxyStatus();
+            autoRecoveryPending = !ProxyStatus;
+            if (ProxyStatus)
+            {
+                recoveryBackoff = TimeSpan.FromSeconds(30);
+                lastTokenRefresh = DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                IncreaseRecoveryBackoff();
+            }
+        }
+        catch (Exception ex)
+        {
+            IncreaseRecoveryBackoff();
+            Log.Error(nameof(ProxyService), ex, "Proxy recovery failed.");
+        }
+        finally
+        {
+            ProxyStarting = false;
+            ProxyStopping = false;
+        }
+    }
+
+    void IncreaseRecoveryBackoff()
+        => recoveryBackoff = recoveryBackoff < TimeSpan.FromMinutes(5)
+            ? recoveryBackoff * 2
+            : TimeSpan.FromMinutes(5);
 
     public void StopTimer()
     {

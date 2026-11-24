@@ -121,4 +121,18 @@ sealed class DnsAnalysisServiceSwitchImpl : IDnsAnalysisService
         var r = await dnsAnalysisServiceImpl.GetIsIpv6SupportAsync();
         return r;
     }
+
+    public void InvalidateDns(string host)
+        => dnsDohAnalysisService.InvalidateDns(host);
+
+    public void ClearDnsCache()
+    {
+        lock (serverLock)
+        {
+            cachedServers = null;
+            cachedConfiguration = null;
+        }
+        dnsDohAnalysisService.ClearDnsCache();
+        dnsAnalysisServiceImpl.ClearDnsCache();
+    }
 }

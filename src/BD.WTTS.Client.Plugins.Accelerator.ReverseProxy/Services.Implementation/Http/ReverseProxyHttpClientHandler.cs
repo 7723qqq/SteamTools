@@ -8,6 +8,7 @@ sealed class ReverseProxyHttpClientHandler : DelegatingHandler
     readonly IDomainConfig domainConfig;
     readonly IDomainResolver domainResolver;
     readonly IWebProxy webProxy;
+    readonly TlsSniPattern tlsSniPattern;
     readonly TimeSpan connectTimeout = TimeSpan.FromSeconds(10d);
 
     public ReverseProxyHttpClientHandler(IDomainConfig domainConfig, IDomainResolver domainResolver, IWebProxy webProxy)
@@ -15,6 +16,7 @@ sealed class ReverseProxyHttpClientHandler : DelegatingHandler
         this.domainConfig = domainConfig;
         this.domainResolver = domainResolver;
         this.webProxy = webProxy;
+        tlsSniPattern = domainConfig.GetTlsSniPattern();
         InnerHandler = CreateSocketsHttpHandler();
     }
 
@@ -31,7 +33,7 @@ sealed class ReverseProxyHttpClientHandler : DelegatingHandler
 
         // 请求上下文信息
         var isHttps = uri.Scheme == Uri.UriSchemeHttps;
-        var tlsSniValue = domainConfig.GetTlsSniPattern().WithDomain(uri.Host).WithRandom();
+        var tlsSniValue = tlsSniPattern.WithDomain(uri.Host).WithRandom();
         request.SetRequestContext(new RequestContext(isHttps, tlsSniValue));
 
         // Preserve a non-default port in the forwarded Host header.
@@ -60,6 +62,8 @@ sealed class ReverseProxyHttpClientHandler : DelegatingHandler
         AllowAutoRedirect = false,
         AutomaticDecompression = DecompressionMethods.None,
         ConnectCallback = ConnectCallback,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
         EnableMultipleHttp2Connections = true,
         EnableMultipleHttp3Connections = true,
         RequestHeaderEncodingSelector = (_, _) => Encoding.UTF8,
@@ -190,8 +194,13 @@ sealed class ReverseProxyHttpClientHandler : DelegatingHandler
         var credentials = webProxy.Credentials as NetworkCredential;
         var userId = credentials?.UserName ?? string.Empty;
 
-        var destinationAddress = await GetIPEndPointsAsync(context.DnsEndPoint, cancellationToken)
-            .Where(x => x.AddressFamily == AddressFamily.InterNetwork).FirstAsync(cancellationToken);
+        var destinationAddress = await GetIPEndPointsAsync(
+            context.DnsEndPoint,
+            includeConfiguredIp: true,
+            cancellationToken)
+            .Where(x => x.EndPoint.AddressFamily == AddressFamily.InterNetwork)
+            .Select(x => x.EndPoint)
+            .FirstAsync(cancellationToken);
         var userBytes = Encoding.ASCII.GetBytes(userId);
         var request = new byte[9 + userBytes.Length];
         request[0] = 0x04;
@@ -299,6 +308,14 @@ sealed class ReverseProxyHttpClientHandler : DelegatingHandler
     }
 
     /// <summary>
+    /// 首个候选地址超过此时间仍未连上时，其余候选并发发起
+    /// </summary>
+    static readonly TimeSpan hedgeDelay = TimeSpan.FromMilliseconds(200);
+    const int MaxHedgeConcurrency = 4;
+
+    internal readonly record struct ConnectCandidate(IPEndPoint EndPoint, string HealthHost);
+
+    /// <summary>
     /// 连接回调
     /// </summary>
     /// <param name="context"></param>
@@ -311,30 +328,194 @@ sealed class ReverseProxyHttpClientHandler : DelegatingHandler
             return await ConnectThroughProxyAsync(context, cancellationToken);
         }
 
-        var innerExceptions = new List<Exception>();
-        var ipEndPoints = GetIPEndPointsAsync(context.DnsEndPoint, cancellationToken);
-
-        await foreach (var ipEndPoint in ipEndPoints)
+        // 规则里固定了目标 IP 时优先直连，避免为收集全部候选而多做一次解析
+        if (domainConfig.IPAddress != null)
         {
             try
             {
-                using var timeoutTokenSource = new CancellationTokenSource(connectTimeout);
-                using var linkedTokenSource = CancellationTokenSource.CreateLinkedTokenSource(timeoutTokenSource.Token, cancellationToken);
-                return await ConnectAsync(context, ipEndPoint, linkedTokenSource.Token);
+                return await ConnectAttemptAsync(context,
+                    new IPEndPoint(domainConfig.IPAddress, context.DnsEndPoint.Port),
+                    context.DnsEndPoint.Host, cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                innerExceptions.Add(new TimeoutException(
-                    $"HTTP connection to {ipEndPoint.Address} timed out."));
+                throw;
             }
-            catch (Exception ex)
+            catch
             {
-                innerExceptions.Add(ex);
+                // 固定 IP 不可用时回落到解析结果
             }
         }
 
+        if (IPAddress.TryParse(context.DnsEndPoint.Host, out var literalAddress) &&
+            domainConfig.IPAddress == null &&
+            domainConfig.ForwardDestination == null)
+        {
+            using var timeoutTokenSource = new CancellationTokenSource(connectTimeout);
+            using var linkedTokenSource = CancellationTokenSource.CreateLinkedTokenSource(
+                timeoutTokenSource.Token, cancellationToken);
+            try
+            {
+                return await ConnectAsync(context,
+                    new IPEndPoint(literalAddress, context.DnsEndPoint.Port),
+                    linkedTokenSource.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (
+                timeoutTokenSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"HTTP connection to {literalAddress} timed out.", ex);
+            }
+        }
+
+        var candidates = new List<ConnectCandidate>(4);
+        await foreach (var candidate in GetIPEndPointsAsync(
+            context.DnsEndPoint,
+            includeConfiguredIp: domainConfig.IPAddress == null,
+            cancellationToken).ConfigureAwait(false))
+        {
+            candidates.Add(candidate);
+        }
+
+        if (candidates.Count == 0)
+        {
+            domainResolver.InvalidateDns(context.DnsEndPoint.Host);
+            throw new AggregateException("Could not find any IP that can be successfully connected.", Array.Empty<Exception>());
+        }
+
+        if (candidates.Count == 1)
+        {
+            try
+            {
+                return await ConnectAttemptAsync(context, candidates[0].EndPoint, candidates[0].HealthHost, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                domainResolver.InvalidateDns(candidates[0].HealthHost);
+                throw;
+            }
+        }
+
+        return await ConnectWithHedgeAsync(context, candidates, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 先连第一个候选，超过 <see cref="hedgeDelay"/> 未成功则把剩余候选并发打出去，取最先连上的
+    /// </summary>
+    async ValueTask<Stream> ConnectWithHedgeAsync(SocketsHttpConnectionContext context, List<ConnectCandidate> candidates, CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var pending = new List<Task<Stream>>(candidates.Count);
+        var innerExceptions = new List<Exception>(candidates.Count);
+        var next = 0;
+
+        void StartNext()
+        {
+            if (next < candidates.Count)
+            {
+                var candidate = candidates[next++];
+                pending.Add(ConnectAttemptAsync(context, candidate.EndPoint, candidate.HealthHost, linked.Token));
+            }
+        }
+
+        StartNext();
+        Task? hedgeTimer = Task.Delay(hedgeDelay, linked.Token);
+
+        try
+        {
+            while (pending.Count > 0)
+            {
+                Task finished;
+                if (hedgeTimer is null)
+                {
+                    finished = await Task.WhenAny(pending).ConfigureAwait(false);
+                }
+                else
+                {
+                    finished = await Task.WhenAny(pending.Cast<Task>().Append(hedgeTimer)).ConfigureAwait(false);
+                    if (ReferenceEquals(finished, hedgeTimer))
+                    {
+                        hedgeTimer = null;
+                        // 首连超过对冲时间仍未返回，其余候选按上限并发
+                        while (next < candidates.Count && pending.Count < MaxHedgeConcurrency)
+                            StartNext();
+                        continue;
+                    }
+                }
+
+                var attempt = (Task<Stream>)finished;
+                pending.Remove(attempt);
+
+                try
+                {
+                    return await attempt.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    innerExceptions.Add(ex);
+                    // 失败后立刻补下一个，保证始终有连接在飞
+                    StartNext();
+                }
+            }
+        }
+        finally
+        {
+            // 取消并释放仍在进行中的连接，避免留下未观察的异常或已成功的流
+            linked.Cancel();
+            foreach (var remaining in pending)
+                ObserveAndDispose(remaining);
+        }
+
+        foreach (var host in candidates.Select(x => x.HealthHost).Distinct(StringComparer.OrdinalIgnoreCase))
+            domainResolver.InvalidateDns(host);
+
         throw new AggregateException("Could not find any IP that can be successfully connected.", innerExceptions);
+    }
+
+    internal static void ObserveAndDispose(Task<Stream> task)
+    {
+        _ = task.ContinueWith(static x =>
+        {
+            if (x.IsCompletedSuccessfully)
+                x.Result.Dispose();
+            else
+                _ = x.Exception;
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// 按单个地址建立连接，并记录结果用于后续排序
+    /// </summary>
+    async Task<Stream> ConnectAttemptAsync(SocketsHttpConnectionContext context, IPEndPoint ipEndPoint, string healthHost, CancellationToken cancellationToken)
+    {
+        var started = Stopwatch.GetTimestamp();
+        using var timeoutTokenSource = new CancellationTokenSource(connectTimeout);
+        using var linkedTokenSource = CancellationTokenSource.CreateLinkedTokenSource(timeoutTokenSource.Token, cancellationToken);
+        try
+        {
+            var stream = await ConnectAsync(context, ipEndPoint, linkedTokenSource.Token).ConfigureAwait(false);
+            domainResolver.RecordConnectResult(healthHost, ipEndPoint.Address, Stopwatch.GetElapsedTime(started));
+            return stream;
+        }
+        catch (Exception ex)
+        {
+            var timedOut = timeoutTokenSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
+            // 对冲成功后其余连接会被取消，这种取消不代表地址不可用，不计入失败
+            var cancelled = !timedOut && (linkedTokenSource.IsCancellationRequested || cancellationToken.IsCancellationRequested);
+            if (!cancelled)
+                domainResolver.RecordConnectResult(healthHost, ipEndPoint.Address, null);
+            if (timedOut)
+                throw new TimeoutException($"HTTP connection to {ipEndPoint.Address} timed out.", ex);
+            throw;
+        }
     }
 
     /// <summary>
@@ -399,30 +580,33 @@ sealed class ReverseProxyHttpClientHandler : DelegatingHandler
     /// <param name="dnsEndPoint"></param>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    async IAsyncEnumerable<IPEndPoint> GetIPEndPointsAsync(DnsEndPoint dnsEndPoint, [EnumeratorCancellation] CancellationToken cancellationToken)
+    internal async IAsyncEnumerable<ConnectCandidate> GetIPEndPointsAsync(
+        DnsEndPoint dnsEndPoint,
+        bool includeConfiguredIp,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (IPAddress.TryParse(dnsEndPoint.Host, out var address))
         {
-            yield return new IPEndPoint(address, dnsEndPoint.Port);
+            yield return new ConnectCandidate(new IPEndPoint(address, dnsEndPoint.Port), dnsEndPoint.Host);
         }
         else
         {
-            if (domainConfig.IPAddress != null)
+            if (includeConfiguredIp && domainConfig.IPAddress != null)
             {
-                yield return new IPEndPoint(domainConfig.IPAddress, dnsEndPoint.Port);
+                yield return new ConnectCandidate(new IPEndPoint(domainConfig.IPAddress, dnsEndPoint.Port), dnsEndPoint.Host);
             }
 
             if (domainConfig.ForwardDestination != null)
             {
                 await foreach (var item in domainResolver.ResolveAsync(new DnsEndPoint(domainConfig.ForwardDestination, dnsEndPoint.Port), cancellationToken))
                 {
-                    yield return new IPEndPoint(item, dnsEndPoint.Port);
+                    yield return new ConnectCandidate(new IPEndPoint(item, dnsEndPoint.Port), domainConfig.ForwardDestination);
                 }
             }
 
             await foreach (var item in domainResolver.ResolveAsync(dnsEndPoint, cancellationToken))
             {
-                yield return new IPEndPoint(item, dnsEndPoint.Port);
+                yield return new ConnectCandidate(new IPEndPoint(item, dnsEndPoint.Port), dnsEndPoint.Host);
             }
         }
     }

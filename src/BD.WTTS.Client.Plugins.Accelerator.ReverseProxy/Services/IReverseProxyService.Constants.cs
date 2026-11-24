@@ -51,6 +51,11 @@ public partial interface IReverseProxyService : IDisposable
     IReadOnlyCollection<ScriptIPCDTO>? Scripts { get; set; }
 
     /// <summary>
+    /// 运行中更新服务端代理令牌
+    /// </summary>
+    void UpdateServerSideProxyToken(string? token);
+
+    /// <summary>
     /// 启动代理服务
     /// </summary>
     Task<StartProxyResult> StartProxyAsync(byte[] reverseProxySettings);

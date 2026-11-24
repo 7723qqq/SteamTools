@@ -25,6 +25,8 @@ sealed class LazyReverseProxyServiceImpl : IReverseProxyService
 
     public Task<ProxyLogUpdate?> GetLogUpdateAsync(Guid streamId, long offset) => impl().GetLogUpdateAsync(streamId, offset);
 
+    public void UpdateServerSideProxyToken(string? token) => impl().UpdateServerSideProxyToken(token);
+
     public async Task<StartProxyResult> StartProxyAsync(byte[] reverseProxySettings)
     {
         var result = await impl().StartProxyAsync(reverseProxySettings);

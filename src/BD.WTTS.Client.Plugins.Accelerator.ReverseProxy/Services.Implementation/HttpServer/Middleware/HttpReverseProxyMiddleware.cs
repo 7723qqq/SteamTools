@@ -71,13 +71,7 @@ Actual value was {actualValue}.
         var isScriptInject = reverseProxyConfig.TryGetScriptConfig(url, out var scriptConfigs);
 
         var originalBody = context.Response.Body;
-        MemoryStream? memoryStream = null;
-
-        if (isScriptInject)
-        {
-            memoryStream = new MemoryStream();
-            context.Response.Body = memoryStream;
-        }
+        ScriptResponseBufferStream? responseBuffer = null;
 
         if (TryGetDomainConfig(url.Remove(0, context.Request.Scheme.Length + 3), out var domainConfig, out var unknownHost) == false)
         {
@@ -168,15 +162,33 @@ Actual value was {actualValue}.
                 };
             }
 
+            if (isScriptInject && context.Request.Method == HttpMethods.Get)
+            {
+                responseBuffer = new ScriptResponseBufferStream(originalBody, MaxScriptBufferSize);
+                context.Response.Body = responseBuffer;
+            }
+
             var error = await httpForwarder.SendAsync(context, destinationPrefix, httpClient, forwarderRequestConfig, HttpTransformer.Empty);
 
             if (error != ForwarderError.None)
             {
                 await HandleErrorAsync(context, error);
+                await RestoreResponseBufferAsync(responseBuffer, originalBody, context);
             }
-            else if (isScriptInject)
+            else if (responseBuffer != null)
             {
-                await HandleScriptInject(context, scriptConfigs, memoryStream!, originalBody!);
+                try
+                {
+                    if (!responseBuffer.Passthrough)
+                        await HandleScriptInject(context, scriptConfigs, responseBuffer.Buffer, originalBody);
+                }
+                finally
+                {
+                    if (context.Response.Body == responseBuffer)
+                        context.Response.Body = originalBody;
+                    responseBuffer.Dispose();
+                    responseBuffer = null;
+                }
             }
         }
         else
@@ -254,6 +266,20 @@ Actual value was {actualValue}.
         var result = new Uri(baseUri, destination).ToString();
         logger.LogInformation("{defaultValue} => {result}", defaultValue, result);
         return result;
+    }
+
+    const int MaxScriptBufferSize = 4 * 1024 * 1024;
+
+    async Task RestoreResponseBufferAsync(
+        ScriptResponseBufferStream? responseBuffer,
+        Stream originalBody,
+        HttpContext context)
+    {
+        if (responseBuffer == null) return;
+        if (!responseBuffer.Passthrough)
+            await responseBuffer.CopyToOriginalAsync();
+        responseBuffer.Dispose();
+        context.Response.Body = originalBody;
     }
 
     /// <summary>

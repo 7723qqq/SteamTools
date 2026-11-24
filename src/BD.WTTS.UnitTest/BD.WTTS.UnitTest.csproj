@@ -34,6 +34,12 @@
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Certificate\DerEncoder.cs">
 			<LinkBase>Services.Implementation\Certificate</LinkBase>
 		</Compile>
+		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Certificate\CertificateRenewalPolicy.cs">
+			<LinkBase>Services.Implementation\Certificate</LinkBase>
+		</Compile>
+		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\HttpServer\Middleware\ScriptResponseBufferStream.cs">
+			<LinkBase>Services.Implementation\HttpServer\Middleware</LinkBase>
+		</Compile>
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services\Certificate\CertificateFailureDiagnostics.cs" />
 		<Compile Condition="'$(Configuration)'!='Debug'" Include="..\Utils.cs" />
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Net\DnsDohAnalysisService.cs">
@@ -41,6 +47,7 @@
 		</Compile>
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Net\DnsAnalysisServiceImpl.cs" />
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Net\DnsAnalysisServiceSwitchImpl.cs" />
+		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Net\ConnectHealthStore.cs" />
 		<Compile Include="..\ImplicitUsings.Enums.cs" />
 		<Compile Include="..\ImplicitUsings.Models.cs" />
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Http\ReverseProxyHttpClientHandler.cs" />

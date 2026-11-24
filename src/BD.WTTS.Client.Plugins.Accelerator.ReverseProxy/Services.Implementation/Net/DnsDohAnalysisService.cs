@@ -33,6 +33,17 @@ sealed class DnsDohAnalysisService : GeneralHttpClientFactory, IDisposable
         Cache.Clear();
     }
 
+    public void InvalidateDns(string host)
+    {
+        foreach (var pair in Cache)
+        {
+            if (string.Equals(pair.Key.Host, host, StringComparison.OrdinalIgnoreCase))
+                Cache.TryRemove(pair);
+        }
+    }
+
+    public void ClearDnsCache() => Cache.Clear();
+
     public const string DefaultDohAddres = "https://doh.pub/dns-query";
 
     static Uri GetDohAddres(string? dohAddres)
@@ -120,7 +131,14 @@ sealed class DnsDohAnalysisService : GeneralHttpClientFactory, IDisposable
             if (seconds > 0)
             {
                 if (Cache.Count >= 4096)
-                    Cache.Clear();
+                {
+                    var removed = 0;
+                    foreach (var pair in Cache)
+                    {
+                        if (Cache.TryRemove(pair) && ++removed >= 256)
+                            break;
+                    }
+                }
                 Cache[key] = new() { IPAddresses = addresses, ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(seconds) };
             }
         }

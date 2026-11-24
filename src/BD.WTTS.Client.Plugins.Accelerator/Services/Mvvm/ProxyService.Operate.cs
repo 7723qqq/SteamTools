@@ -10,7 +10,14 @@ partial class ProxyService
     const ushort httpsPort = 443;
     ProxyMode proxyMode = defaultProxyMode;
 
-    static string? proxyTokenCache = null;
+    static ProxyTokenCache? proxyTokenCache;
+    static readonly SemaphoreSlim proxyTokenLock = new(1, 1);
+
+    internal readonly record struct ProxyTokenCache(string Token, DateTimeOffset ExpiresAt, Guid UserId)
+    {
+        public bool IsValid(Guid userId, DateTimeOffset now)
+            => UserId == userId && ExpiresAt > now.AddMinutes(5);
+    }
 
     /// <summary>
     /// 启动代理服务
@@ -75,8 +82,9 @@ partial class ProxyService
             proxyDNS = IDnsAnalysisService.DefaultResolverServerList;
         bool isSupportIpv6 = await RefreshIpv6Support();
 
-        string? proxyToken = proxyDomains.Any_Nullable(s => s.ProxyType == ProxyType.ServerAccelerate || s.Items.Any_Nullable(x => x.ProxyType == ProxyType.ServerAccelerate)) ?
-            await TryRequestServerSideProxyToken() : null;
+        usesServerSideProxy = proxyDomains.Any_Nullable(s => s.ProxyType == ProxyType.ServerAccelerate || s.Items.Any_Nullable(x => x.ProxyType == ProxyType.ServerAccelerate));
+        string? proxyToken = usesServerSideProxy
+            ? await TryRequestServerSideProxyToken() : null;
 
         if (ProxySettings.ProxyBeforeDNSCheck.Value)
         {
@@ -289,6 +297,7 @@ partial class ProxyService
                 onlyEnableProxyScript || proxyDomains == null ? [] : proxyDomains.OrderBy(static project => project.Order)
                     .Select(static project => project.Name).ToArray(),
                 ReadTrayTraffic);
+            lastTokenRefresh = DateTimeOffset.UtcNow;
             StartTimer();
             return default;
         }
@@ -329,11 +338,11 @@ partial class ProxyService
     /// 停止代理服务
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    async Task<OperateProxyServiceResult> StopProxyServiceAsync(bool isExit = false)
+    async Task<OperateProxyServiceResult> StopProxyServiceAsync(bool isExit = false, bool isRecovery = false)
     {
         try
         {
-            var result = await StopProxyServiceCoreAsync(isExit);
+            var result = await StopProxyServiceCoreAsync(isExit, isRecovery);
             return result;
         }
         catch (Exception ex)
@@ -342,7 +351,7 @@ partial class ProxyService
         }
     }
 
-    async Task<OperateProxyServiceResult> StopProxyServiceCoreAsync(bool isExit)
+    async Task<OperateProxyServiceResult> StopProxyServiceCoreAsync(bool isExit, bool isRecovery)
     {
         bool callSet = true;
 #if WINDOWS
@@ -407,7 +416,8 @@ partial class ProxyService
 #else
         await reverseProxyService.StopProxyAsync(); // 停止代理服务
 #endif
-        StopTimer(); // 停止 UI 计时器
+        if (!isRecovery)
+            StopTimer(); // 停止 UI 计时器
         traySession = null;
         return default;
     }
@@ -416,24 +426,41 @@ partial class ProxyService
     /// 尝试获取服务端代理token
     /// </summary>
     /// <returns></returns>
-    static async Task<string?> TryRequestServerSideProxyToken()
+    async Task<string?> TryRequestServerSideProxyToken()
     {
+        var userId = UserService.Current.User?.Id ?? Guid.Empty;
+        var cached = proxyTokenCache;
+        if (cached is { } value && value.IsValid(userId, DateTimeOffset.UtcNow))
+        {
+            await TryUpdateServerSideProxyTokenAsync(value.Token);
+            return value.Token;
+        }
+
+        await proxyTokenLock.WaitAsync();
         try
         {
-            if (!string.IsNullOrEmpty(proxyTokenCache))
-                return proxyTokenCache;
+            cached = proxyTokenCache;
+            if (cached is { } current && current.IsValid(userId, DateTimeOffset.UtcNow))
+            {
+                await TryUpdateServerSideProxyTokenAsync(current.Token);
+                return current.Token;
+            }
 
             using CancellationTokenSource cts = new();
-            cts.CancelAfter(TimeSpan.FromSeconds(4.99D)); // 5 秒超时
+            cts.CancelAfter(TimeSpan.FromSeconds(4.99D));
             var resp = await IMicroServiceClient.Instance.Account
                 .GenerateServerSideProxyToken(cts.Token);
 
-            if (resp != null && !string.IsNullOrEmpty(resp.Content?.AccessToken))
+            if (resp != null &&
+                !string.IsNullOrEmpty(resp.Content?.AccessToken) &&
+                resp.Content.ExpiresIn > DateTimeOffset.UtcNow)
             {
-                proxyTokenCache = resp.Content.AccessToken;
+                var token = resp.Content.AccessToken;
+                proxyTokenCache = new ProxyTokenCache(
+                    token, resp.Content.ExpiresIn, userId);
+                await TryUpdateServerSideProxyTokenAsync(token);
+                return token;
             }
-
-            return proxyTokenCache;
         }
         catch (OperationCanceledException)
         {
@@ -442,7 +469,27 @@ partial class ProxyService
         {
             ex.LogAndShowT();
         }
-        return null;
+        finally
+        {
+            proxyTokenLock.Release();
+        }
+
+        return cached is { } fallback && fallback.UserId == userId
+            ? fallback.Token
+            : null;
+    }
+
+    async Task TryUpdateServerSideProxyTokenAsync(string token)
+    {
+        try
+        {
+            if (reverseProxyService.ProxyRunning)
+                reverseProxyService.UpdateServerSideProxyToken(token);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(nameof(ProxyService), ex, "Failed to update the server-side proxy token.");
+        }
     }
 
     /// <summary>

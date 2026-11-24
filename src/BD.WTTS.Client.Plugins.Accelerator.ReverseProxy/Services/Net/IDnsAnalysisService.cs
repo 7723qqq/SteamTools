@@ -82,5 +82,13 @@ partial interface IDnsAnalysisService // 服务函数与 protected 定义
 
     Task<bool> GetIsIpv6SupportAsync() => Task.FromResult(false);
 
+    void InvalidateDns(string host)
+    {
+    }
+
+    void ClearDnsCache()
+    {
+    }
+
     Task<IPAddress?> GetHostIpv6AddresAsync() => Task.FromResult(default(IPAddress));
 }
