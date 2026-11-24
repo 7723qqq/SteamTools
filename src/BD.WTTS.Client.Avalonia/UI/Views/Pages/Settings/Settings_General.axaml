@@ -58,6 +58,15 @@
             </spp:OptionsDisplayItem.ActionButton>
         </spp:OptionsDisplayItem>
 
+        <spp:OptionsDisplayItem Header="{x:Static spp:Strings.Settings_General_ShowStartupDiagnostics}">
+            <spp:OptionsDisplayItem.Icon>
+                <ui:FAFontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&#xE9D9;" />
+            </spp:OptionsDisplayItem.Icon>
+            <spp:OptionsDisplayItem.ActionButton>
+                <ToggleSwitch Classes="LeftContent" IsChecked="{Binding Source={x:Static ms:GeneralSettings.ShowStartupDiagnostics}, Path=Value, Mode=TwoWay}" />
+            </spp:OptionsDisplayItem.ActionButton>
+        </spp:OptionsDisplayItem>
+
         <spp:OptionsDisplayItem Header="{x:Static spp:Strings.Settings_General_UpdateChannel}" IsVisible="{spp:OnPlatform OfficialRelease}">
             <spp:OptionsDisplayItem.Icon>
                 <ui:FAFontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&#xE71D;" />

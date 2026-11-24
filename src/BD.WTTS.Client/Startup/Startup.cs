@@ -199,6 +199,8 @@ public abstract partial class Startup
 #if DEBUG
         Console.WriteLine("BaseDirectory: " + AppContext.BaseDirectory);
 #endif
+        if (!IsDesignMode)
+            ThreadPoolHelper.ConfigureMinThreads();
 #if DEBUG && WINDOWS
         if (!IsDesignMode)
         {

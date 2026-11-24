@@ -183,6 +183,12 @@ public sealed partial class GeneralSettings_ : IGeneralSettings, ISettings, ISet
     [MPKey(22), MP2Key(22), JsonPropertyOrder(22)]
     public string? CustomWebProxyModeCredentialDomain { get; set; } = IGeneralSettings.DefaultCustomWebProxyModeCredentialDomain;
 
+    /// <summary>
+    /// 启动时在控制台输出诊断信息
+    /// </summary>
+    [MPKey(23), MP2Key(23), JsonPropertyOrder(23)]
+    public bool ShowStartupDiagnostics { get; set; } = IGeneralSettings.DefaultShowStartupDiagnostics;
+
     #endregion
 
 }
@@ -194,6 +200,12 @@ public static partial class GeneralSettings
     /// </summary>
     public static SettingsStructProperty<bool, GeneralSettings_> AutoCheckAppUpdate { get; }
         = new(DefaultAutoCheckAppUpdate);
+
+    /// <summary>
+    /// 启动时在控制台输出诊断信息
+    /// </summary>
+    public static SettingsStructProperty<bool, GeneralSettings_> ShowStartupDiagnostics { get; }
+        = new(DefaultShowStartupDiagnostics);
 
     /// <summary>
     /// 选择下载更新渠道

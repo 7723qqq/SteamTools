@@ -52,6 +52,10 @@ partial class Startup // 配置 Host
         if (ISettings<GeneralSettings_>.Load(directoryExists, out var @delegate, out var generalSettings))
             InvalidConfigurationFileNames.Add(GeneralSettings_.Name);
 
+#if STARTUP_WATCH_TRACE || DEBUG
+        WatchTrace.Configure(generalSettings?.CurrentValue.ShowStartupDiagnostics ?? false);
+#endif
+
         #endregion
 
         // Apply the saved culture before plugins and view models capture localized text.

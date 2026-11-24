@@ -73,9 +73,8 @@ partial class Startup // OnStartup
                 });
             }
         }
-#if DEBUG
-        DebugConsole.WriteInfo();
-#endif
+        if (GeneralSettings.ShowStartupDiagnostics.Value)
+            DebugConsole.WriteInfo();
 
 #if STARTUP_WATCH_TRACE || DEBUG
         WatchTrace.Stop();
