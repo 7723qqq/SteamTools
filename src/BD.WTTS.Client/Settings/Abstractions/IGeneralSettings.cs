@@ -26,6 +26,11 @@ public partial interface IGeneralSettings
     bool AutoCheckAppUpdate { get; set; }
 
     /// <summary>
+    /// 启动时在控制台输出诊断信息（字体族、路径、版本、线程状态等）
+    /// </summary>
+    bool ShowStartupDiagnostics { get; set; }
+
+    /// <summary>
     /// 选择下载更新渠道
     /// </summary>
     UpdateChannelType UpdateChannel { get; set; }
@@ -143,6 +148,11 @@ public partial interface IGeneralSettings
     /// 自动检查应用更新的默认值
     /// </summary>
     const bool DefaultAutoCheckAppUpdate = true;
+
+    /// <summary>
+    /// 启动时输出诊断信息的默认值
+    /// </summary>
+    const bool DefaultShowStartupDiagnostics = false;
 
     /// <summary>
     /// 选择下载更新渠道的默认值

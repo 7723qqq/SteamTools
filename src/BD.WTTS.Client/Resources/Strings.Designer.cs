@@ -11780,6 +11780,15 @@ namespace BD.WTTS.Client.Resources {
                 return ResourceManager.GetString("Settings_General_AutoCheckUpdate", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///     Looks up a localized string similar to 启动时输出诊断信息.
+        /// </summary>
+        public static string Settings_General_ShowStartupDiagnostics {
+            get {
+                return ResourceManager.GetString("Settings_General_ShowStartupDiagnostics", resourceCulture);
+            }
+        }
         
         /// <summary>
         ///     Looks up a localized string similar to 打开 {0} 文件夹.

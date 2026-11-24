@@ -7,25 +7,53 @@ partial class Startup // 启动耗时跟踪
     /// <summary>
     /// 启动耗时跟踪
     /// </summary>
+    /// <remarks>
+    /// 记录先缓存，停止时再按设置决定是否输出到控制台。
+    /// 早期阶段在设置加载之前就已记录，直接输出会丢掉最前面的耗时。
+    /// </remarks>
     public static class WatchTrace
     {
         static Stopwatch? sw;
         static long elapsedMilliseconds;
+        static readonly List<string> lines = new(32);
+        static bool configured;
+        static bool enabled;
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        static void WatchTraceWriteLine(
-            [StringSyntax(StringSyntaxAttribute.CompositeFormat)] string format,
-            params object?[] args)
+        static void Write(string line)
         {
-            Debug.WriteLine(format, args);
-            Console.WriteLine(string.Format(format, args));
+            Debug.WriteLine(line);
+            lines.Add(line);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Flush()
+        {
+            if (!configured || lines.Count == 0) return;
+
+            if (enabled)
+                foreach (var line in lines)
+                    DebugConsole.WriteLine(line);
+
+            lines.Clear();
+        }
+
+        internal static void Configure(bool enabled)
+        {
+            WatchTrace.enabled = enabled;
+            configured = true;
+            Flush();
         }
 
         /// <summary>
-        /// 停止计时器
+        /// 停止计时器，并按设置输出已记录的耗时
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public static void Stop() => sw?.Stop();
+        public static void Stop()
+        {
+            sw?.Stop();
+            Flush();
+        }
 
         /// <summary>
         /// 启动计时器
@@ -33,7 +61,7 @@ partial class Startup // 启动耗时跟踪
         [MethodImpl(MethodImplOptions.NoInlining)]
         public static void Start()
         {
-            Stop();
+            sw?.Stop();
             sw = Stopwatch.StartNew();
         }
 
@@ -48,7 +76,7 @@ partial class Startup // 启动耗时跟踪
 
             sw.Stop();
             elapsedMilliseconds += sw.ElapsedMilliseconds;
-            WatchTraceWriteLine("{1} {0}ms", sw.ElapsedMilliseconds, mark);
+            Write($"{mark} {sw.ElapsedMilliseconds}ms");
             sw.Restart();
         }
 
@@ -62,7 +90,8 @@ partial class Startup // 启动耗时跟踪
 
             sw.Stop();
             elapsedMilliseconds += sw.ElapsedMilliseconds;
-            WatchTraceWriteLine("Total {0}ms", elapsedMilliseconds);
+            Write($"Total {elapsedMilliseconds}ms");
+            Flush();
         }
     }
 #endif
