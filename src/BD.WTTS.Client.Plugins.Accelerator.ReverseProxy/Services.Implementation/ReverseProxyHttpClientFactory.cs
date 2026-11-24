@@ -18,7 +18,7 @@ sealed class ReverseProxyHttpClientFactory : IReverseProxyHttpClientFactory
     /// <summary>
     /// 非首次生命周期
     /// </summary>
-    readonly TimeSpan nextLifeTime = TimeSpan.FromSeconds(100d);
+    readonly TimeSpan nextLifeTime = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// <see cref="LifetimeHttpHandler"/> 清理器
@@ -28,7 +28,7 @@ sealed class ReverseProxyHttpClientFactory : IReverseProxyHttpClientFactory
     /// <summary>
     /// Lazy(LifetimeHttpHandler) 缓存
     /// </summary>
-    readonly ConcurrentDictionary<LifeTimeKey, Lazy<LifetimeHttpHandler>> httpHandlerLazyCache = new();
+    readonly ConcurrentDictionary<LifeTimeKey, Lazy<LifetimeEntry>> httpHandlerLazyCache = new();
 
     public ReverseProxyHttpClientFactory(IDomainResolver domainResolver, IReverseProxyConfig reverseProxyConfig)
     {
@@ -48,22 +48,40 @@ sealed class ReverseProxyHttpClientFactory : IReverseProxyHttpClientFactory
     public ReverseProxyHttpClient CreateHttpClient(string domain, IDomainConfig domainConfig)
     {
         var lifeTimeKey = new LifeTimeKey(domain, domainConfig);
-        var lifetimeHttpHandler = httpHandlerLazyCache.GetOrAdd(lifeTimeKey,
-            static (key, factory) => new Lazy<LifetimeHttpHandler>(
-                () => factory.CreateLifetimeHttpHandler(key, factory.firstLiftTime), true), this).Value;
-        return new ReverseProxyHttpClient(lifetimeHttpHandler, disposeHandler: false);
+        var entry = httpHandlerLazyCache.GetOrAdd(lifeTimeKey,
+            static (key, factory) => new Lazy<LifetimeEntry>(
+                () => factory.CreateLifetimeEntry(key, factory.firstLiftTime), true), this).Value;
+        return entry.Client;
+    }
+
+    LifetimeEntry CreateLifetimeEntry(LifeTimeKey lifeTimeKey, TimeSpan lifeTime)
+    {
+        var handler = CreateLifetimeHttpHandler(lifeTimeKey, lifeTime);
+        return new LifetimeEntry(handler, new ReverseProxyHttpClient(handler, disposeHandler: false));
+    }
+
+    sealed class LifetimeEntry
+    {
+        public LifetimeEntry(LifetimeHttpHandler handler, ReverseProxyHttpClient client)
+        {
+            Handler = handler;
+            Client = client;
+        }
+
+        public LifetimeHttpHandler Handler { get; }
+        public ReverseProxyHttpClient Client { get; }
     }
 
     LifetimeHttpHandler CreateLifetimeHttpHandler(LifeTimeKey lifeTimeKey, TimeSpan lifeTime)
         => new(domainResolver, webProxy, lifeTimeKey, lifeTime, OnLifetimeHttpHandlerDeactivate);
 
-    void OnLifetimeHttpHandlerDeactivate(LifetimeHttpHandler lifetimeHttpHandler)
+    void OnLifetimeHttpHandlerDeactivate(LifetimeHttpHandler handler)
     {
-        var lifeTimeKey = lifetimeHttpHandler.LifeTimeKey;
-        httpHandlerLazyCache[lifeTimeKey] = CreateNextLifetimeHttpHandlerLazy(lifeTimeKey);
-        httpHandlerCleaner.Add(lifetimeHttpHandler);
+        var lifeTimeKey = handler.LifeTimeKey;
+        httpHandlerLazyCache[lifeTimeKey] = CreateNextLifetimeEntryLazy(lifeTimeKey);
+        httpHandlerCleaner.Add(handler);
 
-        Lazy<LifetimeHttpHandler> CreateNextLifetimeHttpHandlerLazy(LifeTimeKey lifeTimeKey)
-            => new(() => CreateLifetimeHttpHandler(lifeTimeKey, nextLifeTime), true);
+        Lazy<LifetimeEntry> CreateNextLifetimeEntryLazy(LifeTimeKey lifeTimeKey)
+            => new(() => CreateLifetimeEntry(lifeTimeKey, nextLifeTime), true);
     }
 }

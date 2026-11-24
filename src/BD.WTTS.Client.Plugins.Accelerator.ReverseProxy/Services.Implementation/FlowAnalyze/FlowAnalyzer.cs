@@ -6,6 +6,7 @@ namespace BD.WTTS.Services.Implementation;
 sealed class FlowAnalyzer : IFlowAnalyzer
 {
     const int INTERVAL_SECONDS = 5;
+    const int CounterCount = 64;
 
     readonly FlowQueues readQueues = new(INTERVAL_SECONDS);
     readonly FlowQueues writeQueues = new(INTERVAL_SECONDS);
@@ -37,16 +38,11 @@ sealed class FlowAnalyzer : IFlowAnalyzer
 
     sealed class FlowQueues
     {
-        int cleaning = 0;
-        long totalBytes = 0L;
-
-        record QueueItem(long Ticks, int Length);
-
-        readonly ConcurrentQueue<QueueItem> queues = new();
-
+        readonly Counter[] counters = new Counter[CounterCount];
         readonly int intervalSeconds;
+        long totalBytes;
 
-        public long TotalBytes => totalBytes;
+        public long TotalBytes => Volatile.Read(ref totalBytes);
 
         public FlowQueues(int intervalSeconds)
         {
@@ -55,36 +51,35 @@ sealed class FlowAnalyzer : IFlowAnalyzer
 
         public void OnFlow(int length)
         {
+            var ticks = Environment.TickCount64 / 1000;
+            ref var counter = ref counters[(uint)Environment.CurrentManagedThreadId % CounterCount];
+            if (Volatile.Read(ref counter.Ticks) != ticks)
+            {
+                Volatile.Write(ref counter.Ticks, ticks);
+                Volatile.Write(ref counter.Length, 0);
+            }
+            Interlocked.Add(ref counter.Length, length);
             Interlocked.Add(ref totalBytes, length);
-            CleanInvalidRecords();
-            queues.Enqueue(new QueueItem(Environment.TickCount64, length));
         }
 
         public double GetRate()
         {
-            CleanInvalidRecords();
-            double intervalSecondsDouble = intervalSeconds;
-            return queues.Sum(item => item.Length) / intervalSecondsDouble;
+            var now = Environment.TickCount64 / 1000;
+            long length = 0;
+            for (var i = 0; i < counters.Length; i++)
+            {
+                ref var counter = ref counters[i];
+                var ticks = Volatile.Read(ref counter.Ticks);
+                if (ticks != 0 && now - ticks < intervalSeconds)
+                    length += Volatile.Read(ref counter.Length);
+            }
+            return length / (double)intervalSeconds;
         }
 
-        /// <summary>
-        /// 清除无效记录
-        /// </summary>
-        /// <returns></returns>
-        bool CleanInvalidRecords()
+        struct Counter
         {
-            if (Interlocked.CompareExchange(ref cleaning, 1, 0) != 0)
-                return false;
-
-            var ticks = Environment.TickCount64;
-            while (queues.TryPeek(out var item))
-                if (ticks - item.Ticks < intervalSeconds * 1000)
-                    break;
-                else
-                    queues.TryDequeue(out _);
-
-            Interlocked.Exchange(ref cleaning, 0);
-            return true;
+            public long Ticks;
+            public long Length;
         }
     }
 }

@@ -25,6 +25,9 @@
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\HttpServer\Middleware\HttpReverseProxyMiddleware.FindScriptInjectInsertPosition.cs">
 			<LinkBase>Services.Implementation\HttpServer\Middleware</LinkBase>
 		</Compile>
+		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\HttpServer\Middleware\ScriptResponseBufferStream.cs">
+			<LinkBase>Services.Implementation\HttpServer\Middleware</LinkBase>
+		</Compile>
 		<Compile Include="..\BD.WTTS.Client.Plugins.Accelerator.ReverseProxy\Services.Implementation\Certificate\CertGenerator.cs">
 			<LinkBase>Services.Implementation\Certificate</LinkBase>
 		</Compile>

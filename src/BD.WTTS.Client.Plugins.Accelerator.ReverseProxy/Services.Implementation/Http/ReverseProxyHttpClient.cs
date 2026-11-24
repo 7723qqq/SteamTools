@@ -42,7 +42,7 @@ public class ReverseProxyHttpClient : HttpMessageInvoker
         //}
         //request.Headers.UserAgent.Add(userAgent);
         var response = await base.SendAsync(request, cancellationToken);
-        response.Headers.Server.TryParseAdd(Constants.HARDCODED_APP_NAME_NEW);
+        response.Headers.TryAddWithoutValidation("Server", Constants.HARDCODED_APP_NAME_NEW);
         return response;
     }
 }
