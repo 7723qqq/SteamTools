@@ -1,5 +1,6 @@
 using DnsClient;
 using DnsClient.Protocol;
+using System.Runtime.ExceptionServices;
 using static BD.WTTS.Services.IDnsAnalysisService;
 
 // ReSharper disable once CheckNamespace
@@ -25,6 +26,8 @@ sealed class DnsAnalysisServiceImpl
                 Timeout = TimeSpan.FromSeconds(2),
             }))
             : lookupClient;
+
+    public void ClearDnsCache() => serverClients.Clear();
 
     public async Task<int> AnalysisHostnameTimeAsync(string url, IPAddress[]? dnsServers = null, CancellationToken cancellationToken = default)
     {
@@ -71,40 +74,61 @@ sealed class DnsAnalysisServiceImpl
 
         var options = dnsServers.Length > 1 ? new DnsQueryAndServerOptions(dnsServers) { UseCache = false } : null;
         var client = GetClient(dnsServers);
+
+        // AAAA 与 A 并行查询，避免两次往返串行累加；输出顺序仍保持 AAAA 优先
+        var ipv6Query = isIPv6 ? QuerySafeAsync(client, options, hostNameOrAddress, QueryType.AAAA, cancellationToken) : null;
+        var ipv4Query = QuerySafeAsync(client, options, hostNameOrAddress, QueryType.A, cancellationToken);
+
         var hasIpv6 = false;
-        if (isIPv6)
+        if (ipv6Query != null)
         {
-            IDnsQueryResponse? response = null;
-            try
-            {
-                var question = new DnsQuestion(hostNameOrAddress, QueryType.AAAA);
-                response = options == null
-                    ? await client.QueryAsync(question, cancellationToken)
-                    : await client.QueryAsync(question, options, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception) { }
-            if (response != null && !response.HasError)
-                foreach (var item in response.Answers.AaaaRecords())
+            var (ipv6, ipv6Error) = await ipv6Query;
+            ThrowIfCanceled(ipv6Error, cancellationToken);
+            if (ipv6 != null && !ipv6.HasError)
+                foreach (var item in ipv6.Answers.AaaaRecords())
                 {
                     hasIpv6 = true;
                     yield return item.Address;
                 }
         }
 
-        IDnsQueryResponse? ipv4 = null;
-        try
-        {
-            var question = new DnsQuestion(hostNameOrAddress, QueryType.A);
-            ipv4 = options == null
-                ? await client.QueryAsync(question, cancellationToken)
-                : await client.QueryAsync(question, options, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception) when (hasIpv6) { }
+        var (ipv4, ipv4Error) = await ipv4Query;
+        ThrowIfCanceled(ipv4Error, cancellationToken);
         if (ipv4 != null && !ipv4.HasError)
             foreach (var item in ipv4.Answers.ARecords())
                 yield return item.Address;
+        else if (ipv4Error != null && !hasIpv6)
+            ExceptionDispatchInfo.Throw(ipv4Error);
+    }
+
+    /// <summary>
+    /// 查询失败时把异常作为结果返回，避免并发任务未被观察
+    /// </summary>
+    static async Task<(IDnsQueryResponse? Response, Exception? Error)> QuerySafeAsync(
+        LookupClient client,
+        DnsQueryAndServerOptions? options,
+        string hostNameOrAddress,
+        QueryType queryType,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var question = new DnsQuestion(hostNameOrAddress, queryType);
+            var response = options == null
+                ? await client.QueryAsync(question, cancellationToken).ConfigureAwait(false)
+                : await client.QueryAsync(question, options, cancellationToken).ConfigureAwait(false);
+            return (response, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex);
+        }
+    }
+
+    static void ThrowIfCanceled(Exception? error, CancellationToken cancellationToken)
+    {
+        if (error is OperationCanceledException && cancellationToken.IsCancellationRequested)
+            ExceptionDispatchInfo.Throw(error);
     }
 
     public async Task<string?> GetHostByIPAddressAsync(IPAddress ip)

@@ -216,6 +216,24 @@ public sealed class DnsDohAnalysisTest
         Assert.That(calls, Is.EqualTo(new[] { "first" }));
     }
 
+    [Test]
+    public async Task InvalidateDnsRemovesCachedAnswersForHostOnly()
+    {
+        using var doh = new DnsDohAnalysisService(NullLoggerFactory.Instance, null!, null!);
+        AddServer(doh, "https://working.invalid/dns-query", new DnsHandler("working", new List<string>(), HttpStatusCode.OK, true));
+        await doh.DohAnalysisDomainIpAsync(
+            "https://working.invalid/dns-query", "cached.example.test", false).ToArrayAsync();
+        await doh.DohAnalysisDomainIpAsync(
+            "https://working.invalid/dns-query", "other.example.test", false).ToArrayAsync();
+        var field = typeof(DnsDohAnalysisService).GetField("Cache", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var cache = (System.Collections.IDictionary)field.GetValue(doh)!;
+        Assert.That(cache.Count, Is.EqualTo(2));
+
+        doh.InvalidateDns("CACHED.EXAMPLE.TEST");
+
+        Assert.That(cache.Count, Is.EqualTo(1));
+    }
+
     [TestCase("https://doh.pub/resolve", "https://doh.pub/dns-query")]
     [TestCase("https://dns.alidns.com/resolve", "https://dns.alidns.com/dns-query")]
     [TestCase("https://custom.invalid/resolve?key=value", "https://custom.invalid/resolve?key=value")]

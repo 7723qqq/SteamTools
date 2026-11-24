@@ -252,6 +252,73 @@ sealed partial class CertificateManagerImpl : ICertificateManager
         return GenerateCertificate(null);
     }
 
+    internal bool RenewRootCertificate()
+    {
+        lock (lockGenerateCertificate)
+        {
+            var oldCertificate = RootCertificate ?? LoadRootCertificate();
+            if (oldCertificate == null ||
+                !CertificateRenewalPolicy.ShouldRenew(DateTimeOffset.UtcNow, oldCertificate.NotAfter))
+            {
+                return false;
+            }
+
+            var pfxTempPath = Interface.PfxFilePath + ".renew";
+            var cerTempPath = Interface.CerFilePath + ".renew";
+            X509Certificate2? newCertificate = null;
+            try
+            {
+                var now = DateTimeOffset.UtcNow;
+                newCertificate = CertGenerator.GenerateBySelfPfx(
+                    null,
+                    now.AddDays(-1),
+                    now.AddDays(CertificateConstants.CertificateValidDays),
+                    pfxTempPath,
+                    GetPfxPassword());
+                newCertificate.SaveCerCertificateFile(cerTempPath);
+
+                ICertificateManager.Constants.TrustRootCertificate(
+                    () => cerTempPath, platformService, newCertificate);
+                var newPackable = X509CertificatePackable.CreateX509Certificate2(
+                    pfxTempPath, GetPfxPassword(), X509KeyStorageFlags.Exportable);
+                if (!ICertificateManager.Constants.IsCertificateInstalled(platformService, newPackable))
+                    return false;
+
+                File.Move(cerTempPath, Interface.CerFilePath, true);
+                File.Move(pfxTempPath, Interface.PfxFilePath, true);
+                RootCertificate = newCertificate;
+                RootCertificatePackable = newPackable;
+                newCertificate = null;
+
+                if (OperatingSystem.IsWindows() && oldCertificate.Thumbprint != RootCertificate.Thumbprint)
+                {
+                    try
+                    {
+                        using var store = new X509Store(StoreName.Root, StoreLocation.LocalMachine);
+                        store.Open(OpenFlags.ReadWrite);
+                        foreach (var certificate in store.Certificates.Find(
+                            X509FindType.FindByThumbprint, oldCertificate.Thumbprint, false))
+                        {
+                            store.Remove(certificate);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(TAG, ex, "Failed to remove the previous trusted root certificate.");
+                    }
+                }
+
+                return true;
+            }
+            finally
+            {
+                newCertificate?.Dispose();
+                IOPath.FileTryDelete(pfxTempPath);
+                IOPath.FileTryDelete(cerTempPath);
+            }
+        }
+    }
+
     //    public void TrustRootCertificate()
     //    {
     //        try

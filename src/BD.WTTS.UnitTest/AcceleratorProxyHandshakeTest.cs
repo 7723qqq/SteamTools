@@ -89,6 +89,16 @@ public sealed class AcceleratorProxyHandshakeTest
     }
 
     [Test]
+    public void UnselectedSuccessfulConnectionIsDisposed()
+    {
+        using var stream = new MemoryStream();
+
+        ReverseProxyHttpClientHandler.ObserveAndDispose(Task.FromResult<Stream>(stream));
+
+        Assert.That(stream.CanRead, Is.False);
+    }
+
+    [Test]
     public async Task HttpConnectFragmentedHeadersLeaveTunnelClean()
     {
         await RunProxyAsync("http", "http://example.test:18400/", async (stream, token) =>

@@ -9,6 +9,8 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
     static readonly string RootPath = Path.Combine(IOPath.AppDataDirectory, "Yarp");
 
     WebApplication? app;
+    int proxyHealthy;
+    readonly SemaphoreSlim lifecycleLock = new(1, 1);
     readonly IPCSubProcessService ipc;
     readonly IPCToastService toast;
     readonly IPCPlatformService platformService;
@@ -38,7 +40,10 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
 
     public override CertificateManagerImpl CertificateManager { get; }
 
-    public override bool ProxyRunning => app != null;
+    public override bool ProxyRunning => app != null && Volatile.Read(ref proxyHealthy) != 0;
+
+    public void UpdateServerSideProxyToken(string? token)
+        => ServerSideProxyToken = token;
 
     protected override StartProxyResultCode CheckRootCertificate()
     {
@@ -49,51 +54,54 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
                 CertificateManager);
             if (certificateResult != StartProxyResultCode.Ok)
                 return certificateResult;
-
-            try
-            {
-                X509Certificate2? cer = CertificateManager.RootCertificatePackable;
-                if (cer is not null &&
-                    DateTime.Now <= cer.NotAfter && cer.NotAfter <= DateTime.Now.AddMilliseconds(int.MaxValue))
-                {
-                    var interval = cer.NotAfter - DateTime.Now;
-
-                    _certificateTimer = new System.Timers.Timer(interval)
-                    {
-                        AutoReset = false,
-                    };
-
-                    _certificateTimer.Elapsed += async (_, _) =>
-                    {
-                        try
-                        {
-                            var result = ICertificateManager.Constants.CheckRootCertificate(
-                                platformService,
-                                CertificateManager);
-
-                            if (result != StartProxyResultCode.Ok)
-                                return;
-
-                            await StopProxyAsync();
-                            await StartProxyImpl();
-                        }
-                        catch (Exception e)
-                        {
-                            e.LogAndShowT(TAG, msg: "CheckRootCertificate in Timer.Elapsed Error");
-                        }
-                    };
-                    _certificateTimer.Start();
-                }
-            }
-            catch (Exception e)
-            {
-                e.LogAndShowT(TAG, msg: "CheckRootCertificate Error");
-            }
         }
+
+        StartCertificateTimer();
         return StartProxyResultCode.Ok;
     }
 
     private System.Timers.Timer? _certificateTimer;
+    private int certificateRenewalRunning;
+
+    private void StartCertificateTimer()
+    {
+        StopCertificateTimer();
+        _certificateTimer = new System.Timers.Timer(TimeSpan.FromMinutes(5))
+        {
+            AutoReset = true,
+            Interval = TimeSpan.FromDays(1).TotalMilliseconds,
+        };
+        _certificateTimer.Elapsed += (_, _) => _ = CheckCertificateRenewalAsync();
+        _certificateTimer.Start();
+    }
+
+    async Task CheckCertificateRenewalAsync()
+    {
+        if (Interlocked.CompareExchange(ref certificateRenewalRunning, 1, 0) != 0)
+            return;
+        try
+        {
+            X509Certificate2? certificate = CertificateManager.RootCertificatePackable;
+            if (certificate == null ||
+                !CertificateRenewalPolicy.ShouldRenew(DateTimeOffset.UtcNow, certificate.NotAfter))
+            {
+                return;
+            }
+
+            if (!CertificateManager.RenewRootCertificate())
+                return;
+
+            app?.Services.GetRequiredService<CertService>()?.ReloadRootCertificate();
+        }
+        catch (Exception e)
+        {
+            e.LogAndShowT(TAG, msg: "CheckRootCertificate in Timer.Elapsed Error");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref certificateRenewalRunning, 0);
+        }
+    }
 
     private void StopCertificateTimer()
     {
@@ -150,6 +158,19 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
 
     async Task<StartProxyResult> StartProxyCoreAsync()
     {
+        await lifecycleLock.WaitAsync();
+        try
+        {
+            return await StartProxyCoreAsyncCore();
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
+    }
+
+    async Task<StartProxyResult> StartProxyCoreAsyncCore()
+    {
 #if WINDOWS
         if (!IcuTest(allowedHosts))
         {
@@ -160,6 +181,7 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
         try
         {
             IOPath.DirCreateByNotExists(RootPath);
+            IReverseProxyConfig.RefreshPorts();
 
             var applicationOptions = new WebApplicationOptions
             {
@@ -220,14 +242,17 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
             });
 
             app = builder.Build();
+            app.Lifetime.ApplicationStopped.Register(() => Volatile.Write(ref proxyHealthy, 0));
             app.UseHostFiltering();
             StartupConfigure(app);
 
             await app.StartAsync();
+            Volatile.Write(ref proxyHealthy, 1);
             return StartProxyResultCode.Ok;
         }
         catch (Exception ex)
         {
+            Volatile.Write(ref proxyHealthy, 0);
             OnException(ex);
             StopCertificateTimer();
             var failedApp = app;
@@ -267,13 +292,33 @@ sealed partial class YarpReverseProxyServiceImpl : ReverseProxyServiceImpl, IRev
 
     public async Task StopProxyAsync()
     {
+        await lifecycleLock.WaitAsync();
+        try
+        {
+            await StopProxyAsyncCore();
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
+    }
+
+    async Task StopProxyAsyncCore()
+    {
         StopCertificateTimer();
         Scripts = null;
         if (app == null) return;
-        await app.StopAsync();
-        if (app == null) return;
-        await app.DisposeAsync();
+        var currentApp = app;
         app = null;
+        Volatile.Write(ref proxyHealthy, 0);
+        try
+        {
+            await currentApp.StopAsync();
+        }
+        finally
+        {
+            await currentApp.DisposeAsync();
+        }
     }
 
     public byte[]? GetFlowStatistics_Bytes()
